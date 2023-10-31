@@ -1,3 +1,15 @@
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <stddef.h>
+#include <assert.h>
+#include <unistd.h>
+
 struct sb {
     long fs_size;  //文件系统的大小，以块为单位
     long first_blk;  //数据区的第一块块号，根目录也放在此

@@ -69,7 +69,77 @@ short int find_in_block(char*file_name,char*extensions,int off,off_t size){
     fp.close();
     return res;                    
 }
-
+short int find_once_indirect(char*file_name,char*extensions,short int addr,off_t size){
+    short int res=-1;
+    short int offset = 0;
+    //在一级间接里找
+    int block_bit=size-2048;
+    int block_num=block_bit/512;
+    int last_block=block_bit%512;
+    short int *ndir=NULL;
+    int noff=0;
+    FILE *fp=NULL;
+    fp = fopen(FILEADDR, "r+");
+    int i=0
+    for(;i<block_num;i++){
+        offset=addr*512+i*2;
+        fseek(fp, offset, SEEK_SET);
+        read(fp,ndir,sizeof(short int));
+        noff=(*ndir)*512;
+        res=find_in_block(file_name,extensions,noff,512);
+        if(res!=-1){
+            free(ndir);
+            fp.close();
+            return res;
+        }
+    }
+    if(last_block!=0){
+    offset=addr*512+i*2;
+    fseek(fp, offset, SEEK_SET);
+    read(fp,ndir,sizeof(short int));
+    noff=(*ndir)*512;
+    res=find_in_block(file_name,extensions,noff,last_block);
+    }
+    free(ndir);
+    fp.close();
+    return res;
+    
+}
+short int find_twice_indirect(char*file_name,char*extensions,short int addr,off_t size){
+    short int res=-1;
+    short int offset = 0;
+    offset=addr*512;
+    int block_bit=size-133120;
+    int block_num_2=block_bit/(512*256);
+    int last_block_2=block_bit%(512*256);
+    short int *ndir=NULL;
+    int naddr=0;
+    FILE *fp=NULL;
+    fp = fopen(FILEADDR, "r+");
+    int i=0
+    for(;i<block_num_2;i++){
+        offset=addr*512+i*2;
+        fseek(fp, offset, SEEK_SET);
+        read(fp,ndir,sizeof(short int));
+        naddr=(*ndir);
+        res=find_once_indirect(filename,extensions,naddr,133120);
+        if(res!=-1){
+            free(ndir);
+            fp.close();
+            return res;
+        } 
+    }
+    if(lask_block_2!=0){
+        offset=addr*512+i*2;
+        fseek(fp, offset, SEEK_SET);
+        read(fp,naddr,sizeof(short int));
+        naddr=(*ndir);
+        res=find_in_block(file_name,extensions,naddr,last_block_2);
+    }
+    free(ndir);
+    fp.close();
+    return res;
+}
 short int find(char*file_name,char*extensions,char addr[],off_t size){
     //0，1，2，3直接，4一级间接，5二级间接，6三级间接
     //目录项16字节，一个块512字节，可以放32个
@@ -78,19 +148,20 @@ short int find(char*file_name,char*extensions,char addr[],off_t size){
     short int offset = 0;
     if(size<=2048){//不大于4*512=2048的，直接访问
         int time = size/512;
-        if(time%512==0){
-            time--;
-        }
-        time++;
+        int remind = time%512;
         int index=0;
         while(time){
             offset = addr[index]*512;
-            res=find_in_block(file_name,extensions,offset,size);
+            res=find_in_block(file_name,extensions,offset,512);
             if(res!=-1){
                 return res;
             }
             time--;
             index++;
+        }
+        if(remind!=0){
+            offset = addr[index]*512;
+            res=find_in_block(file_name,extensions,offset,remind);
         }
         return res;      
         
@@ -100,24 +171,90 @@ short int find(char*file_name,char*extensions,char addr[],off_t size){
         int index=0;
         while(time){
             offset = addr[index]*512;
-            res=find_in_block(file_name,extensions,offset,size);
+            res=find_in_block(file_name,extensions,offset,512);
             if(res!=-1){
                 return res;
             }
             time--;
             index++;
         }
-        if(res==-1){
-            //在一级间接里找
-            
+        res=find_once_indirect(file_name,extensions,addr[4],size);
+        return res;
+    }
+    else if(size<=33687552){//不大于133120+256*256*512=33687552的，再加二级
+        int time=4;
+        int index=0;
+        while(time){
+            offset = addr[index]*512;
+            res=find_in_block(file_name,extensions,offset,512);
+            if(res!=-1){
+                return res;
+            }
+            time--;
+            index++;
         }
+        res=find_once_indirect(file_name,extensions,addr[4],133120);
+        if(res!=-1){
+            return res;
+        }
+        //启动第二级
+       res=find_twice_indirect(file_name,extensions,addr[5],size);
+        return res;
         
     }
-    else if(size<=33687552){////不大于133120+256*256*512=33687552的，再加二级
-
-    }
     else{//剩下的都是上了三级的
-
+        int time=4;
+        int index=0;
+        while(time){
+            offset = addr[index]*512;
+            res=find_in_block(file_name,extensions,offset,512);
+            if(res!=-1){
+                return res;
+            }
+            time--;
+            index++;
+        }
+        res=find_once_indirect(file_name,extensions,addr[4],133120);
+        if(res!=-1){
+            return res;
+        }
+        //启动第二级
+        res=find_twice_indirect(file_name,extensions,addr[5],33687552);
+        if(res!=-1){
+            return res;
+        }
+        //第三级
+        offset=addr[6]*512;
+        int block_bit=size-33687552;
+        int block_num_3=block_bit/(512*256*256);
+        int last_block_3=block_bit%(512*256*256);
+        short int *ndir=NULL;
+        int naddr=0;
+        FILE *fp=NULL;
+        fp = fopen(FILEADDR, "r+");
+        int i=0
+        for(;i<block_num_3;i++){
+            offset=addr[6]*512+i*2;
+            fseek(fp, offset, SEEK_SET);
+            read(fp,ndir,sizeof(short int));
+            naddr=(*ndir);
+            res=find_twice_indirect(filename,extensions,naddr,33687552);
+            if(res!=-1){
+                free(ndir);
+                fp.close();
+                return res;
+            } 
+        }
+        if(lask_block_3!=0){
+            offset=addr*512+i*2;
+            fseek(fp, offset, SEEK_SET);
+            read(fp,naddr,sizeof(short int));
+            naddr=(*ndir);
+            res=find_in_block(file_name,extensions,naddr,last_block_3);
+        }
+        free(ndir);
+        fp.close();
+        return res;
     }
 }
 int get_fd_to_attr(const char *path,struct inode *io){
@@ -146,6 +283,8 @@ int get_fd_to_attr(const char *path,struct inode *io){
     short int curnode = 0;
     struct inode *now = malloc(sizeof(struct inode));
     for (int j = 0; j < i; j++) {
+        fseek(fp, offset, SEEK_SET);
+        read(fp,now,sizeof(struct inode));
         if(strcmp(file_names[i], "")&&strcmp(extensions[i],"")){
             //就是当前这个目录
             memcpy(io,now,sizeof(struct inode));
@@ -153,8 +292,7 @@ int get_fd_to_attr(const char *path,struct inode *io){
             fp.close();
             return 1;
         }
-        fseek(fp, offset, SEEK_SET);
-        read(fp,now,sizeof(struct inode));
+       
         if(now->st_size==0){
             //这一级目录空的，肯定没有你要找的东西
             free(now);
@@ -174,6 +312,8 @@ int get_fd_to_attr(const char *path,struct inode *io){
             return 0;
         }
     }
+    fseek(fp, offset, SEEK_SET);
+    read(fp,now,sizeof(struct inode));
     memcpy(io,now,sizeof(struct inode));
     free(now);
     fp.close();

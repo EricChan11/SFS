@@ -25,13 +25,14 @@ struct sb
 };
 
 struct inode
-{                            // 共64字节
-    short int st_mode;       /* 权限，2字节 */
-    short int st_ino;        /* i-node号，2字节 */
-    char st_nlink;           /* 连接数，1字节 */
-    uid_t st_uid;            /* 拥有者的用户 ID ，4字节 */
-    gid_t st_gid;            /* 拥有者的组 ID，4字节  */
-    off_t st_size;           /*文件大小，4字节 */
+{                      // 共64字节
+    short int st_mode; /* 权限，2字节 */
+    short int st_ino;  /* i-node号，2字节 */
+    char st_nlink;     /* 连接数，1字节 */
+    uid_t st_uid;      /* 拥有者的用户 ID ，4字节 */
+    gid_t st_gid;      /* 拥有者的组 ID，4字节  */
+    off_t st_size;     /*文件大小，4字节 */
+    off_t ac_size;
     struct timespec st_atim; /* 16个字节time of last access */
     short int addr[7];       /*磁盘地址，14字节*/
 };
@@ -48,6 +49,7 @@ struct directory
     char name[9];
     char expand[4];
     short int st_ino; /* i-node号，2字节 */
+    // st_ino=-1, is deleted, a tomb in here
     // 3字节备用
 };
 short int find_in_block(char *file_name, char *extensions, int off, off_t size)
@@ -147,7 +149,7 @@ short int find_twice_indirect(char *file_name, char *extensions, short int addr,
         fseek(fp, offset, SEEK_SET);
         read(fp, naddr, sizeof(short int));
         naddr = (*ndir);
-        res = find_in_block(file_name, extensions, naddr, last_block_2);
+        res = find_once_indirect(file_name, extensions, naddr, last_block_2);
     }
     free(ndir);
     fclose(fp);
@@ -281,7 +283,7 @@ short int find(char *file_name, char *extensions, char addr[], off_t size)
             fseek(fp, offset, SEEK_SET);
             read(fp, naddr, sizeof(short int));
             naddr = (*ndir);
-            res = find_in_block(file_name, extensions, naddr, last_block_3);
+            res = find_twice_indirect(file_name, extensions, naddr, last_block_3);
         }
         free(ndir);
         fclose(fp);
@@ -400,7 +402,186 @@ static int SFS_getattr(const char *path, struct stat *stbuf)
     free(io);
     return res;
 }
+void list_block(void *buf, int off, off_t size, fuse_fill_dir_t &filler)
+{
+    struct directory *dir = malloc(sizeof(struct directory));
+    FILE *fp = NULL;
+    fp = fopen(FILEADDR, "r+");
+    short int i = 0;
+    char name[8 + 3 + 2];
+    while (i < size)
+    {
+        fseek(fp, off, SEEK_SET);
+        read(fp, dir, sizeof(struct directory));
+        // 复制过去
+        if (dir->st_ino != -1)
+        {
+            strcpy(name, dir->name);
+            if (strlen(dir->expand) != 0)
+            {
+                strcat(name, ".");
+                strcat(name, dir->expand);
+            }
+            filler(buf, name, NULL, 0, 0);
+        }
+        off += 16;
+        i += 16;
+    }
+    free(dir);
+    fclose(fp);
+};
+void list_once(void *buf, short int addr, int st_size, fuse_fill_dir_t &filler)
+{
+    // if (st_size <= 2048)
+    // {
+    //     list_block(buf, addr * 512, st_size, filler);
+    // }
+    int time0 = st_size >= 133120 ? 256 : (st_size - 2048) / (512);
+    int last0 = st_size >= 133120 ? 0 : (st_size - 2048) % (512);
+    short int offset = 0;
+    // 在一级间接里找
+    short int *ndir = NULL;
+    int noff = 0;
+    FILE *fp = NULL;
+    fp = fopen(FILEADDR, "r+");
+    int i = 0;
+    for (; i < time0; i++)
+    {
+        offset = addr * 512 + i * 2;
+        fseek(fp, offset, SEEK_SET);
+        read(fp, ndir, sizeof(short int));
+        noff = (*ndir) * 512;
+        list_block(buf, noff, 512, filler);
+    }
+    if (last0 != 0)
+    {
+        offset = addr * 512 + i * 2;
+        fseek(fp, offset, SEEK_SET);
+        read(fp, ndir, sizeof(short int));
+        noff = (*ndir) * 512;
+        list_block(buf, noff, last0, filler);
+    }
+    free(ndir);
+    fclose(fp);
+}
+void list_twice(void *buf, short int addr, int st_size, fuse_fill_dir_t &filler)
+{
+    // if (st_size <= 133120)
+    // {
+    //     list_once(buf, addr, st_size, filler);
+    //     return;
+    // }
+    int time0 = st_size >= 33687552 ? 256 : (st_size - 133120) / (512 * 256);
+    int last0 = st_size >= 33687552 ? 0 : (st_size - 133120) % (512 * 256);
+    short int offset = 0;
+    // 在一级间接里找
+    short int *ndir = NULL;
+    int noff = 0;
+    FILE *fp = NULL;
+    fp = fopen(FILEADDR, "r+");
+    int i = 0;
+    for (; i < time0; i++)
+    {
+        offset = addr * 512 + i * 2;
+        fseek(fp, offset, SEEK_SET);
+        read(fp, ndir, sizeof(short int));
+        // noff = (*ndir) * 512;
+        list_once(buf, ndir, 133120, filler);
+    }
+    if (last0 != 0)
+    {
+        offset = addr * 512 + i * 2;
+        fseek(fp, offset, SEEK_SET);
+        read(fp, ndir, sizeof(short int));
+        // noff = (*ndir) * 512;
+        list_once(buf, ndir, last0, filler);
+    }
+    free(ndir);
+    fclose(fp);
+}
+static int MFS_readdir(const char *path, void *buf, fuse_fill_dir_t filler) //,enum use_readdir_flags flags)
+{
+    struct inode *io = malloc(sizeof(struct inode));
+    // 打开path指定的文件，将文件属性读到io中
+    if (get_fd_to_attr(path, io) != 1)
+    { // 不是目录，退出
+        free(io);
+        return -ENOENT;
+    }
+    // 无论是什么目录，先用filler函数添加 . 和 ..
+    filler(buf, ".", NULL, 0, 0);
+    filler(buf, "..", NULL, 0, 0);
+    // 按顺序查找,并向buf添加目录内的文件和目录名
+    int index = 0;
+    int time0 = io->st_size >= 2048 ? 4 : io->st_size / 512;
+    int last0 = io->st_size >= 2048 ? 0 : io->st_size % 512;
+    int offset = 0;
+    // 直接
+    while (time0)
+    {
+        offset = io->addr[index] * 512;
+        // 读一个块
+        list_block(buf, offset, 512, filler);
+        time0--;
+        index++;
+    }
+    if (last0 != 0)
+    {
+        offset = io->addr[index] * 512;
+        list_block(buf, offset, last0, filler);
+        // 读剩下的
+    }
+    // 一级
+    if (io->st_size > 2048)
+    {
 
+        list_once(buf, io->addr[4], io->st_size, filler);
+    }
+    // 二级
+    if (io->st_size > 133120)
+    {
+        // time0 = io->st_size >= 33687552 ? 256 : (io->st_size - 133120) / (512 * 256);
+        // last0 = io->st_size >= 33687552 ? 0 : (io->st_size - 133120) % (512 * 256);
+        list_twice(buf, io->addr[5], io->st_size, filler);
+    }
+    // 三级
+    if (io->st_size > 33687552)
+    {
+        time0 = (io->st_size - 33687552) / (512 * 256 * 256);
+        last0 = (io->st_size - 33687552) % (512 * 256 * 256);
+
+        FILE *fp = NULL;
+        fp = fopen(FILEADDR, "r+");
+
+        int i = 0;
+        short int *ndir = NULL;
+        int naddr = 0;
+        for (; i < time0; i++)
+        {
+            offset = io->addr[6] * 512 + i * 2;
+            fseek(fp, offset, SEEK_SET);
+            read(fp, ndir, sizeof(short int));
+            naddr = (*ndir);
+            list_twice(buf, naddr, 33687552, filler);
+        }
+        if (last0 != 0)
+        {
+            offset = io->addr[6] * 512 + i * 2;
+            fseek(fp, offset, SEEK_SET);
+            read(fp, ndir, sizeof(short int));
+            naddr = (*ndir);
+            list_twice(buf, naddr, last0, filler);
+            // res = find_in_block(file_name, extensions, naddr, last_block_3);
+        }
+        free(ndir);
+        fclose(fp);
+    }
+    free(io);
+    return 0;
+    // fill的定义：
+    //	typedef int (*fuse_fill_dir_t) (void *buf, const char *name, const struct stat *stbuf, off_t off);
+    //	其作用是在readdir函数中增加一个目录项或者文件
+};
 static struct fuse_operations SFS_opener
 {
     .init = SFS_init,

@@ -9,10 +9,10 @@
 #include <stddef.h>
 #include <assert.h>
 #include <unistd.h>
+#include <time.h>
 
 #define FILENAME 8
 #define EXPAND 3
-#define FILEADDR ""
 #define BLOCKSIZE 512
 struct sb
 {
@@ -49,7 +49,7 @@ struct directory
 int main()
 {
     FILE *fp = NULL;
-    fp = fopen(FILEADDR, "r+"); // 打开文件
+    fp = fopen("/home/cky/Desktop/SFS/disk", "r+"); // 打开文件
     if (fp == NULL)
     {
         printf("打开文件失败，文件不存在\n");

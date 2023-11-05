@@ -59,7 +59,7 @@ int main()
     // Inode区占4K*64B/512B=512块
     // 共有8MB/512B=16K=16,384块
     // 根目录的Inode在6块的前64个字节（0-5，共6块被SB，Inode位图，数据块位图占据）
-    // 根目录在516块（0-515，共516块被SB，Inode位图，数据块位图，Inode占据）
+    // 根目录在518块（0-517，共518块被SB，Inode位图，数据块位图，Inode占据）
     // 数据区还剩下16384-516=15,868
     // 1. 初始化SB     大小：1块
     struct sb *super_blk = malloc(sizeof(struct sb)); // 动态内存分配，申请super_blk

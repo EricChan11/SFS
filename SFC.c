@@ -581,7 +581,109 @@ static int MFS_readdir(const char *path, void *buf, fuse_fill_dir_t filler) //,e
     // fill的定义：
     //	typedef int (*fuse_fill_dir_t) (void *buf, const char *name, const struct stat *stbuf, off_t off);
     //	其作用是在readdir函数中增加一个目录项或者文件
-};
+}
+int findAndSetFirstZeroBit(unsigned char *bitmap, int size)
+{
+    for (int i = 0; i < size; i++)
+    {
+        for (int j = 0; j < 8; j++)
+        {
+            unsigned char mask = 1 << j;
+            if ((bitmap[i] & mask) == 0)
+            {
+                // 找到第一个0位，将其设置为1
+                bitmap[i] |= mask;
+                return i * 8 + j;
+            }
+        }
+    }
+    return -1; // 如果没有找到0位，可以返回一个特殊值或采取其他操作
+}
+void mkd(char *name, struct inode *root)
+{
+    if (root->st_size < 2048)
+    {
+        int block = root->st_size / 512;
+        int inblock = root->st_size % 512;
+        FILE *fp = NULL;
+        fp = fopen(FILEADDR, "r+");
+
+        struct directory *ndir = malloc(sizeof(struct directory));
+        memcpy(ndir->name, name, strlen(name));
+        ndir->expand[0] = '\0';
+        // 搞个inode号
+        // 同时把inode位图的那一位置1
+        unsigned char bitmap[512];
+        fseek(fp, 512, SEEK_SET);
+        read(fp, bitmap, 500);
+        int node = findFirstSetBit(bitmap, 512);
+        write(fp, bitmap, 500);
+        // 如果正好新开一块，找个新块号，改位图和addr
+        if (inblock == 0)
+        {
+            unsigned char datamap[2048];
+            fseek(fp, 1024, SEEK_SET);
+            read(fp, datamap, 2048);
+            int nblock = findAndSetFirstZeroBit(datamap, 2048);
+            write(fp, datamap, 2048);
+            root->addr[block] = node;
+        }
+        // 目录项写回去
+        ndir->st_ino = node;
+        fseek(fp, root->addr[block] * 512 + inblock * 16, SEEK_SET);
+        write(fp, ndir, sizeof(struct directory));
+        // 改inode区
+        struct inode *nnode = malloc(sizeof(struct inode));
+        nnode->st_ino = node;
+        nnode->st_nlink = 0;
+        nnode->ac_size = 0;
+        nnode->st_size = 0;
+        fseek(fp, 512 + 64 * node, SEEK_SET);
+        write(fp, nnode, sizeof(struct inode));
+        // 改root
+        root->st_nlink++;
+        fseek(fp, 512 * 6, SEEK_SET);
+        write(fp, root, sizeof(struct inode));
+        free(nnode);
+        free(ndir);
+        fclose(fp);
+        return;
+    }
+}
+static int MFS_readdir(char *name)
+{
+    if (strlen(name) > 8)
+    {
+        printf("SFS_readattr：文件名过长\n\n");
+        return -ENAMETOOLONG;
+    }
+    for (int i = 0; i < strlen(name); i++)
+    {
+        if (name[i] == '/')
+        {
+            printf("SFS_readattr：要创建的目录不在根目录下\n\n");
+            return -EPERM;
+        }
+    }
+    char *ex = "\0";
+    struct inode *root = malloc(sizeof(struct inode));
+    FILE *fp = NULL;
+    fp = fopen(FILEADDR, "r+");
+    fseek(fp, 6 * 512, SEEK_SET);
+    read(fp, root, sizeof(struct inode));
+    if (find(name, ex, root->addr, root->st_size) != -1)
+    {
+        free(root);
+        fclose(fp);
+        return -EEXIST;
+    }
+    mkd(name, root);
+    free(root);
+    fclose(fp);
+    printf("SFS_readattr：成功\n\n");
+    return 0;
+}
+
 static struct fuse_operations SFS_opener
 {
     .init = SFS_init,

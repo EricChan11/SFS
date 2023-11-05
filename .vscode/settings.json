@@ -79,5 +79,8 @@
         }
       }
     ]
+  },
+  "files.associations": {
+    "typeinfo": "c"
   }
 }

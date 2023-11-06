@@ -599,7 +599,7 @@ int findAndSetFirstZeroBit(unsigned char *bitmap, int size)
     }
     return -1; // 如果没有找到0位，可以返回一个特殊值或采取其他操作
 }
-void mkd(char *name, struct inode *root)
+void mkd(char *name, struct inode *root, char *ex)
 {
     if (root->st_size < 2048)
     {
@@ -610,7 +610,14 @@ void mkd(char *name, struct inode *root)
 
         struct directory *ndir = malloc(sizeof(struct directory));
         memcpy(ndir->name, name, strlen(name));
-        ndir->expand[0] = '\0';
+        if (ex == NULL)
+        {
+            ndir->expand[0] = '\0';
+        }
+        else
+        {
+            memcpy(ndir->expand, ex, strlen(ex));
+        }
         // 搞个inode号
         // 同时把inode位图的那一位置1
         unsigned char bitmap[512];
@@ -658,7 +665,14 @@ void mkd(char *name, struct inode *root)
         short int t1 = 0;
         struct directory *ndir = malloc(sizeof(struct directory));
         memcpy(ndir->name, name, strlen(name));
-        ndir->expand[0] = '\0';
+        if (ex == NULL)
+        {
+            ndir->expand[0] = '\0';
+        }
+        else
+        {
+            memcpy(ndir->expand, ex, strlen(ex));
+        }
         // 搞个inode号
         // 同时把inode位图的那一位置1
         unsigned char bitmap[512];
@@ -728,7 +742,14 @@ void mkd(char *name, struct inode *root)
         short int t2 = 0;
         struct directory *ndir = malloc(sizeof(struct directory));
         memcpy(ndir->name, name, strlen(name));
-        ndir->expand[0] = '\0';
+        if (ex == NULL)
+        {
+            ndir->expand[0] = '\0';
+        }
+        else
+        {
+            memcpy(ndir->expand, ex, strlen(ex));
+        }
         // 搞个inode号
         // 同时把inode位图的那一位置1
         unsigned char bitmap[512];
@@ -818,7 +839,14 @@ void mkd(char *name, struct inode *root)
         short int t3 = 0;
         struct directory *ndir = malloc(sizeof(struct directory));
         memcpy(ndir->name, name, strlen(name));
-        ndir->expand[0] = '\0';
+        if (ex == NULL)
+        {
+            ndir->expand[0] = '\0';
+        }
+        else
+        {
+            memcpy(ndir->expand, ex, strlen(ex));
+        }
         // 搞个inode号
         // 同时把inode位图的那一位置1
         unsigned char bitmap[512];
@@ -947,13 +975,38 @@ static int MFS_readdir(char *name)
         fclose(fp);
         return -EEXIST;
     }
-    mkd(name, root);
+    mkd(name, root, NULL);
     free(root);
     fclose(fp);
     printf("SFS_readattr：成功\n\n");
     return 0;
 }
-
+static int MFS_mknod(char *name, char *path)
+{
+    if (strcmp(path, "/"))
+    {
+        return -EPERM;
+    }
+    char *tmp = NULL;
+    memcpy(tmp, name, strlen(name));
+    char *dot = strrchr(tmp, '.');
+    if (strlen(name) > 8 || strlen(dot) > 3)
+    {
+        return -ENAMETOOLONG;
+    }
+    memcpy(tmp, path, strlen(path));
+    strcat(tmp, "/");
+    strcat(tmp, name);
+    struct inode *io = malloc(sizeof(struct inode));
+    if (get_fd_to_attr(tmp, io) != 0)
+    {
+        return -EEXIST;
+    }
+    get_fd_to_attr(path, io);
+    char *dot = strrchr(name, '.');
+    mkd(name, io, dot);
+    return 0;
+}
 static struct fuse_operations SFS_opener
 {
     .init = SFS_init,

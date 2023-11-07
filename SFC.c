@@ -1007,6 +1007,110 @@ static int MFS_mknod(char *name, char *path)
     mkd(name, io, dot);
     return 0;
 }
+static int MFS_read(const char *path, char *buf, off_t offset)
+{
+    struct inode *io = malloc(sizeof(struct inode));
+    char *start = buf;
+    if (get_fd_to_attr(path, io) != 2)
+    {
+        return -EISDIR;
+    }
+    FILE *fp = NULL;
+    fp = fopen(FILEADDR, "r+");
+    // 全部读了，再偏移
+    short int blocknum = io->st_size / 512;
+    int blocklast = io->st_size % 512;
+    char *block = malloc(512);
+    short int *t1 = malloc(2);
+    short int *t2 = malloc(2);
+    short int *t3 = malloc(2);
+    for (int i = 0; i < blocknum; i++)
+    {
+        if (i < 4)
+        {
+            fseek(fp, io->addr[i] * 512, SEEK_SET);
+            read(fp, block, 512);
+            memcpy(buf, block, 512);
+            buf += 512;
+        }
+        else if (i < 260)
+        {
+            fseek(fp, io->addr[4] * 512 + (i - 4) * 2, SEEK_SET);
+            read(fp, t1, 2);
+            fseek(fp, (*t1) * 512, SEEK_SET);
+            read(fp, block, 512);
+            memcpy(buf, block, 512);
+            buf += 512;
+        }
+        else if (i < 65796)
+        {
+            fseek(fp, io->addr[5] * 512 + ((i - 260) / 256) * 2, SEEK_SET);
+            read(fp, t1, 2);
+            fseek(fp, (*t1) * 512 + 2 * ((i - 260) % 256), SEEK_SET);
+            read(fp, t2, 2);
+            fseek(fp, (*t2) * 512, SEEK_SET);
+            read(fp, block, 512);
+            memcpy(buf, block, 512);
+            buf += 512;
+        }
+        else
+        {
+            fseek(fp, io->addr[6] * 512 + ((i - 65796) / (256 * 256)) * 2, SEEK_SET);
+            read(fp, t1, 2);
+            fseek(fp, (*t1) * 512 + ((i - 65796) % (256 * 256)) * 2, SEEK_SET);
+            read(fp, t2, 2);
+            fseek(fp, (*t2) * 512 + 2 * (((i - 65796) % (256 * 256)) / 256), SEEK_SET);
+            read(fp, t3, 2);
+            fseek(fp, (*t3) * 512, SEEK_SET);
+            read(fp, block, 512);
+            memcpy(buf, block, 512);
+            buf += 512;
+        }
+    }
+    if (blocklast != 0)
+    {
+        char *last = malloc(blocklast);
+        if (blocknum < 4)
+        {
+            fseek(fp, io->addr[blocknum] * 512, SEEK_SET);
+            read(fp, last, blocklast);
+            memcpy(buf, last, blocklast);
+        }
+        else if (blocknum < 260)
+        {
+            fseek(fp, io->addr[4] * 512 + (blocknum - 4) * 2, SEEK_SET);
+            read(fp, t1, 2);
+            fseek(fp, (*t1) * 512, SEEK_SET);
+            read(fp, last, blocklast);
+            memcpy(buf, last, blocklast);
+        }
+        else if (blocknum < 65796)
+        {
+            fseek(fp, io->addr[5] * 512 + ((blocknum - 260) / 256) * 2, SEEK_SET);
+            read(fp, t1, 2);
+            fseek(fp, (*t1) * 512 + 2 * ((blocknum - 260) % 256), SEEK_SET);
+            read(fp, t2, 2);
+            fseek(fp, (*t2) * 512, SEEK_SET);
+            read(fp, last, blocklast);
+            memcpy(buf, last, blocklast);
+        }
+        else
+        {
+            fseek(fp, io->addr[6] * 512 + ((blocknum - 65796) / (256 * 256)) * 2, SEEK_SET);
+            read(fp, t1, 2);
+            fseek(fp, (*t1) * 512 + ((blocknum - 65796) % (256 * 256)) * 2, SEEK_SET);
+            read(fp, t2, 2);
+            fseek(fp, (*t2) * 512 + 2 * (((blocknum - 65796) % (256 * 256)) / 256), SEEK_SET);
+            read(fp, t3, 2);
+            fseek(fp, (*t3) * 512, SEEK_SET);
+            read(fp, last, blocklast);
+            memcpy(buf, last, blocklast);
+        }
+    }
+    buf = start;
+    buf += offset;
+    return 0;
+}
 static struct fuse_operations SFS_opener
 {
     .init = SFS_init,

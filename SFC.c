@@ -10,6 +10,8 @@
 #include <assert.h>
 #include <unistd.h>
 
+#define FILENAME 8
+#define EXPAND 3
 #define FILEADDR ""
 struct sb
 {
@@ -52,6 +54,120 @@ struct directory
     // st_ino=-1, is deleted, a tomb in here
     // 3字节备用
 };
+void inoinit(struct inode *root)
+{
+    root->st_ino = 0;
+    root->st_size = 0;
+    root->st_nlink = 0;
+    root->st_gid = 0;
+    root->st_uid = 0;
+    root->ac_size = 0;
+    root->st_mode = 0;
+}
+void copyInode(struct inode *root, const struct inode *src)
+{
+    // 浅复制 inode 结构体的非嵌套部分
+
+    root->st_ino = src->st_ino;
+    root->st_size = src->st_size;
+    root->st_nlink = src->st_nlink;
+    root->st_gid = src->st_gid;
+    root->st_uid = src->st_uid;
+    root->ac_size = src->ac_size;
+    root->st_mode = src->st_mode;
+    // 复制 st_atim 成员
+    root->st_atim.tv_sec = src->st_atim.tv_sec;
+    root->st_atim.tv_nsec = src->st_atim.tv_nsec;
+
+    // 复制 addr 数组
+    memcpy(root->addr, src->addr, sizeof(src->addr));
+}
+void writeino(char *buffer, const struct inode *data)
+{
+    int offset = 0;
+    // 写入struct inode的数据到缓冲区
+    memcpy(buffer + offset, &data->st_mode, sizeof(data->st_mode));
+    offset += sizeof(data->st_mode);
+
+    memcpy(buffer + offset, &data->st_ino, sizeof(data->st_ino));
+    offset += sizeof(data->st_ino);
+
+    memcpy(buffer + offset, &data->st_nlink, sizeof(data->st_nlink));
+    offset += sizeof(data->st_nlink);
+
+    memcpy(buffer + offset, &data->st_uid, sizeof(data->st_uid));
+    offset += sizeof(data->st_uid);
+
+    memcpy(buffer + offset, &data->st_gid, sizeof(data->st_gid));
+    offset += sizeof(data->st_gid);
+
+    memcpy(buffer + offset, &data->st_size, sizeof(data->st_size));
+    offset += sizeof(data->st_size);
+
+    memcpy(buffer + offset, &data->ac_size, sizeof(data->ac_size));
+    offset += sizeof(data->ac_size);
+
+    memcpy(buffer + offset, &data->st_atim.tv_sec, sizeof(data->st_atim.tv_sec));
+    offset += sizeof(data->st_atim.tv_sec);
+
+    memcpy(buffer + offset, &data->st_atim.tv_nsec, sizeof(data->st_atim.tv_nsec));
+    offset += sizeof(data->st_atim.tv_nsec);
+
+    // 写入 addr 数组
+    memcpy(buffer + offset, data->addr, sizeof(data->addr));
+}
+
+void readino(const char *buffer, struct inode *data)
+{
+    int offset = 0;
+    // 从缓冲区读取数据到 struct inode
+    memcpy(&data->st_mode, buffer + offset, sizeof(data->st_mode));
+    offset += sizeof(data->st_mode);
+
+    memcpy(&data->st_ino, buffer + offset, sizeof(data->st_ino));
+    offset += sizeof(data->st_ino);
+
+    memcpy(&data->st_nlink, buffer + offset, sizeof(data->st_nlink));
+    offset += sizeof(data->st_nlink);
+
+    memcpy(&data->st_uid, buffer + offset, sizeof(data->st_uid));
+    offset += sizeof(data->st_uid);
+
+    memcpy(&data->st_gid, buffer + offset, sizeof(data->st_gid));
+    offset += sizeof(data->st_gid);
+
+    memcpy(&data->st_size, buffer + offset, sizeof(data->st_size));
+    offset += sizeof(data->st_size);
+
+    memcpy(&data->ac_size, buffer + offset, sizeof(data->ac_size));
+    offset += sizeof(data->ac_size);
+
+    memcpy(&data->st_atim.tv_sec, buffer + offset, sizeof(data->st_atim.tv_sec));
+    offset += sizeof(data->st_atim.tv_sec);
+
+    memcpy(&data->st_atim.tv_nsec, buffer + offset, sizeof(data->st_atim.tv_nsec));
+    offset += sizeof(data->st_atim.tv_nsec);
+
+    // 读取 addr 数组
+    memcpy(data->addr, buffer + offset, sizeof(data->addr));
+}
+
+void writedir(char *buffer, const struct directory *data)
+{
+    // 写入 directory 结构体数据到缓冲区
+    memcpy(buffer, data->name, FILENAME + 1);
+    memcpy(buffer + FILENAME + 1, data->expand, EXPAND + 1);
+    memcpy(buffer + FILENAME + 1 + EXPAND + 1, &data->st_ino, sizeof(data->st_ino));
+}
+
+void readdir(const char *buffer, struct directory *data)
+{
+    // 从缓冲区读取 directory 结构体数据
+    memcpy(data->name, buffer, FILENAME + 1);
+    memcpy(data->expand, buffer + FILENAME + 1, EXPAND + 1);
+    memcpy(&data->st_ino, buffer + FILENAME + 1 + EXPAND + 1, sizeof(data->st_ino));
+}
+
 short int find_in_block(char *file_name, char *extensions, int off, off_t size)
 {
     struct directory *dir = malloc(sizeof(struct directory));
@@ -62,7 +178,9 @@ short int find_in_block(char *file_name, char *extensions, int off, off_t size)
     while (i < size)
     {
         fseek(fp, off, SEEK_SET);
-        read(fp, dir, sizeof(struct directory));
+        char buffer[16] = {0};
+        fread(buffer, 16, 1, fp);
+        readdir(buffer, dir);
         if (strcmp(file_name, dir->name) && strcmp(extensions, dir->expand))
         {
             res = dir->st_ino;
@@ -94,7 +212,7 @@ short int find_once_indirect(char *file_name, char *extensions, short int addr, 
     {
         offset = addr * 512 + i * 2;
         fseek(fp, offset, SEEK_SET);
-        read(fp, ndir, sizeof(short int));
+        fread(ndir, sizeof(short int), 1, fp);
         noff = (*ndir) * 512;
         res = find_in_block(file_name, extensions, noff, 512);
         if (res != -1)
@@ -108,7 +226,7 @@ short int find_once_indirect(char *file_name, char *extensions, short int addr, 
     {
         offset = addr * 512 + i * 2;
         fseek(fp, offset, SEEK_SET);
-        read(fp, ndir, sizeof(short int));
+        fread(ndir, sizeof(short int), 1, fp);
         noff = (*ndir) * 512;
         res = find_in_block(file_name, extensions, noff, last_block);
     }
@@ -133,7 +251,7 @@ short int find_twice_indirect(char *file_name, char *extensions, short int addr,
     {
         offset = addr * 512 + i * 2;
         fseek(fp, offset, SEEK_SET);
-        read(fp, ndir, sizeof(short int));
+        fread(ndir, sizeof(short int), 1, fp);
         naddr = (*ndir);
         res = find_once_indirect(file_name, extensions, naddr, 133120);
         if (res != -1)
@@ -147,7 +265,7 @@ short int find_twice_indirect(char *file_name, char *extensions, short int addr,
     {
         offset = addr * 512 + i * 2;
         fseek(fp, offset, SEEK_SET);
-        read(fp, naddr, sizeof(short int));
+        fread(naddr, sizeof(short int), 1, fp);
         naddr = (*ndir);
         res = find_once_indirect(file_name, extensions, naddr, last_block_2);
     }
@@ -267,7 +385,7 @@ short int find(char *file_name, char *extensions, char addr[], off_t size)
         {
             offset = addr[6] * 512 + i * 2;
             fseek(fp, offset, SEEK_SET);
-            read(fp, ndir, sizeof(short int));
+            fread(ndir, sizeof(short int), 1, fp);
             naddr = (*ndir);
             res = find_twice_indirect(file_name, extensions, naddr, 33687552);
             if (res != -1)
@@ -281,7 +399,7 @@ short int find(char *file_name, char *extensions, char addr[], off_t size)
         {
             offset = addr[6] * 512 + i * 2;
             fseek(fp, offset, SEEK_SET);
-            read(fp, naddr, sizeof(short int));
+            fread(naddr, sizeof(short int), 1, fp);
             naddr = (*ndir);
             res = find_twice_indirect(file_name, extensions, naddr, last_block_3);
         }
@@ -323,11 +441,16 @@ int get_fd_to_attr(const char *path, struct inode *io)
     for (int j = 0; j < i; j++)
     {
         fseek(fp, offset, SEEK_SET);
-        read(fp, now, sizeof(struct inode));
+        char *buffer[64] = {0};
+        fread(buffer, 64, 1, fp);
+        readino(buffer, now);
         if (strcmp(file_names[i], "") && strcmp(extensions[i], ""))
         {
             // 就是当前这个目录
+            // mark
             memcpy(io, now, sizeof(struct inode));
+            io = malloc(sizeof(struct inode));
+            copyInode(io, now);
             free(now);
             fclose(fp);
             return 1;
@@ -356,8 +479,12 @@ int get_fd_to_attr(const char *path, struct inode *io)
         }
     }
     fseek(fp, offset, SEEK_SET);
-    read(fp, now, sizeof(struct inode));
-    memcpy(io, now, sizeof(struct inode));
+    char *buffer[64] = {0};
+    fread(buffer, 64, 1, fp);
+    readino(buffer, now);
+    // mark
+    io = malloc(sizeof(struct inode));
+    copyInode(io, now);
     free(now);
     fclose(fp);
     return 2;
@@ -412,7 +539,9 @@ void list_block(void *buf, int off, off_t size, fuse_fill_dir_t &filler)
     while (i < size)
     {
         fseek(fp, off, SEEK_SET);
-        read(fp, dir, sizeof(struct directory));
+        char *buffer[16] = {0};
+        fread(buffer, 16, 1, fp);
+        readdir(buffer, dir);
         // 复制过去
         if (dir->st_ino != -1)
         {
@@ -449,7 +578,7 @@ void list_once(void *buf, short int addr, int st_size, fuse_fill_dir_t &filler)
     {
         offset = addr * 512 + i * 2;
         fseek(fp, offset, SEEK_SET);
-        read(fp, ndir, sizeof(short int));
+        fread(ndir, sizeof(short int), 1, fp);
         noff = (*ndir) * 512;
         list_block(buf, noff, 512, filler);
     }
@@ -457,7 +586,7 @@ void list_once(void *buf, short int addr, int st_size, fuse_fill_dir_t &filler)
     {
         offset = addr * 512 + i * 2;
         fseek(fp, offset, SEEK_SET);
-        read(fp, ndir, sizeof(short int));
+        fread(ndir, sizeof(short int), 1, fp);
         noff = (*ndir) * 512;
         list_block(buf, noff, last0, filler);
     }
@@ -484,7 +613,7 @@ void list_twice(void *buf, short int addr, int st_size, fuse_fill_dir_t &filler)
     {
         offset = addr * 512 + i * 2;
         fseek(fp, offset, SEEK_SET);
-        read(fp, ndir, sizeof(short int));
+        fread(ndir, sizeof(short int), 1, fp);
         // noff = (*ndir) * 512;
         list_once(buf, ndir, 133120, filler);
     }
@@ -492,7 +621,7 @@ void list_twice(void *buf, short int addr, int st_size, fuse_fill_dir_t &filler)
     {
         offset = addr * 512 + i * 2;
         fseek(fp, offset, SEEK_SET);
-        read(fp, ndir, sizeof(short int));
+        fread(ndir, sizeof(short int), 1, fp);
         // noff = (*ndir) * 512;
         list_once(buf, ndir, last0, filler);
     }
@@ -560,7 +689,7 @@ static int MFS_readdir(const char *path, void *buf, fuse_fill_dir_t filler) //,e
         {
             offset = io->addr[6] * 512 + i * 2;
             fseek(fp, offset, SEEK_SET);
-            read(fp, ndir, sizeof(short int));
+            fread(ndir, sizeof(short int), 1, fp);
             naddr = (*ndir);
             list_twice(buf, naddr, 33687552, filler);
         }
@@ -568,7 +697,7 @@ static int MFS_readdir(const char *path, void *buf, fuse_fill_dir_t filler) //,e
         {
             offset = io->addr[6] * 512 + i * 2;
             fseek(fp, offset, SEEK_SET);
-            read(fp, ndir, sizeof(short int));
+            fread(ndir, sizeof(short int), 1, fp);
             naddr = (*ndir);
             list_twice(buf, naddr, last0, filler);
             // res = find_in_block(file_name, extensions, naddr, last_block_3);
@@ -622,23 +751,25 @@ void mkd(char *name, struct inode *root, char *ex)
         // 同时把inode位图的那一位置1
         unsigned char bitmap[512];
         fseek(fp, 512, SEEK_SET);
-        read(fp, bitmap, 500);
+        fread(bitmap, 500, 1, fp);
         int node = findFirstSetBit(bitmap, 512);
-        write(fp, bitmap, 500);
+        fwrite(bitmap, 500, 1, fp);
         // 如果正好新开一块，找个新块号，改位图和addr
         if (inblock == 0)
         {
             unsigned char datamap[2048];
             fseek(fp, 1024, SEEK_SET);
-            read(fp, datamap, 2048);
+            fread(datamap, 2048, 1, fp);
             int nblock = findAndSetFirstZeroBit(datamap, 2048);
-            write(fp, datamap, 2048);
+            fwrite(datamap, 2048, 1, fp);
             root->addr[block] = nblock;
         }
         // 目录项写回去
         ndir->st_ino = node;
         fseek(fp, root->addr[block] * 512 + inblock, SEEK_SET);
-        write(fp, ndir, sizeof(struct directory));
+        char buffer[16] = {0};
+        writedir(buffer, ndir);
+        fwrite(buffer, 16, 1, fp);
         // 改inode区
         struct inode *nnode = malloc(sizeof(struct inode));
         nnode->st_ino = node;
@@ -646,11 +777,15 @@ void mkd(char *name, struct inode *root, char *ex)
         nnode->ac_size = 0;
         nnode->st_size = 0;
         fseek(fp, 512 + 64 * node, SEEK_SET);
-        write(fp, nnode, sizeof(struct inode));
+        char buffer[64] = {0};
+        writeino(buffer, nnode);
+        fwrite(buffer, 64, 1, fp);
         // 改root
         root->st_nlink++;
         fseek(fp, 512 * 6, SEEK_SET);
-        write(fp, root, sizeof(struct inode));
+        char buffer[64] = {0};
+        writeino(buffer, root);
+        fwrite(buffer, 64, 1, fp);
         free(nnode);
         free(ndir);
         fclose(fp);
@@ -677,44 +812,46 @@ void mkd(char *name, struct inode *root, char *ex)
         // 同时把inode位图的那一位置1
         unsigned char bitmap[512];
         fseek(fp, 512, SEEK_SET);
-        read(fp, bitmap, 500);
+        fread(bitmap, 500, 1, fp);
         int node = findFirstSetBit(bitmap, 512);
-        write(fp, bitmap, 500);
+        fwrite(bitmap, 500, 1, fp);
         // 如果正好新开一块，找个新块号，改位图和addr
         if (root->st_size == 2048)
         {
             unsigned char datamap[2048];
             fseek(fp, 1024, SEEK_SET);
-            read(fp, datamap, 2048);
+            fread(datamap, 2048, 1, fp);
             int nblock = findAndSetFirstZeroBit(datamap, 2048);
-            write(fp, datamap, 2048);
+            fwrite(datamap, 2048, 1, fp);
             root->addr[4] = nblock;
         }
         if (inblock == 0)
         {
             unsigned char datamap[2048];
             fseek(fp, 1024, SEEK_SET);
-            read(fp, datamap, 2048);
+            fread(datamap, 2048, 1, fp);
             int nblock = findAndSetFirstZeroBit(datamap, 2048);
-            write(fp, datamap, 2048);
+            fwrite(datamap, 2048, 1, fp);
 
             short int *tmp = malloc(2);
             *tmp = nblock;
             t1 = nblock;
             fseek(fp, root->addr[4] * 512 + block * 2, SEEK_SET);
-            write(fp, tmp, 2);
+            fwrite(tmp, 2, 1, fp);
             free(tmp);
         }
 
         short int *tmp = malloc(2);
         fseek(fp, root->addr[4] * 512 + 2 * block, SEEK_SET);
-        read(fp, tmp, 2);
+        fread(tmp, 2, 1, fp);
         t1 = *tmp;
         free(tmp);
         fseek(fp, t1 * 512 + inblock, SEEK_SET);
         // 目录项写回去
         ndir->st_ino = node;
-        write(fp, ndir, sizeof(struct directory));
+        char buffer[16] = {0};
+        writedir(buffer, ndir);
+        fwrite(buffer, 16, 1, fp);
         // 改inode区
         struct inode *nnode = malloc(sizeof(struct inode));
         nnode->st_ino = node;
@@ -722,11 +859,15 @@ void mkd(char *name, struct inode *root, char *ex)
         nnode->ac_size = 0;
         nnode->st_size = 0;
         fseek(fp, 512 + 64 * node, SEEK_SET);
-        write(fp, nnode, sizeof(struct inode));
+        char buffer[64] = {0};
+        writeino(buffer, nnode);
+        fwrite(buffer, 64, 1, fp);
         // 改root
         root->st_nlink++;
         fseek(fp, 512 * 6, SEEK_SET);
-        write(fp, root, sizeof(struct inode));
+        char buffer[64] = {0};
+        writeino(buffer, root);
+        fwrite(buffer, 64, 1, fp);
         free(nnode);
         free(ndir);
         fclose(fp);
@@ -754,63 +895,65 @@ void mkd(char *name, struct inode *root, char *ex)
         // 同时把inode位图的那一位置1
         unsigned char bitmap[512];
         fseek(fp, 512, SEEK_SET);
-        read(fp, bitmap, 500);
+        fread(bitmap, 500, 1, fp);
         int node = findFirstSetBit(bitmap, 512);
-        write(fp, bitmap, 500);
+        fwrite(bitmap, 500, 1, fp);
         // 如果正好新开一块，找个新块号，改位图和addr
         if (root->st_size == 133120)
         {
             unsigned char datamap[2048];
             fseek(fp, 1024, SEEK_SET);
-            read(fp, datamap, 2048);
+            fread(datamap, 2048, 1, fp);
             int nblock = findAndSetFirstZeroBit(datamap, 2048);
-            write(fp, datamap, 2048);
+            fwrite(datamap, 2048, 1, fp);
             root->addr[5] = nblock;
         }
         if (inblock == 0)
         {
             unsigned char datamap[2048];
             fseek(fp, 1024, SEEK_SET);
-            read(fp, datamap, 2048);
+            fread(datamap, 2048, 1, fp);
             int nblock = findAndSetFirstZeroBit(datamap, 2048);
-            write(fp, datamap, 2048);
+            fwrite(datamap, 2048, 1, fp);
 
             short int *tmp = malloc(2);
             *tmp = nblock;
             t1 = nblock;
             fseek(fp, root->addr[5] * 512 + block * 2, SEEK_SET);
-            write(fp, tmp, 2);
+            fwrite(tmp, 2, 1, fp);
             free(tmp);
         }
         short int *tmp = malloc(2);
         fseek(fp, root->addr[4] * 512 + 2 * block, SEEK_SET);
-        read(fp, tmp, 2);
+        fread(tmp, 2, 1, fp);
         t1 = *tmp;
         free(tmp);
         if (inblock % 512 == 0)
         {
             unsigned char datamap[2048];
             fseek(fp, 1024, SEEK_SET);
-            read(fp, datamap, 2048);
+            fread(datamap, 2048, 1, fp);
             int nblock = findAndSetFirstZeroBit(datamap, 2048);
-            write(fp, datamap, 2048);
+            fwrite(datamap, 2048, 1, fp);
 
             short int *tmp = malloc(2);
             *tmp = nblock;
             t2 = nblock;
             fseek(fp, t1 * 512 + (inblock / 512) * 2, SEEK_SET);
-            write(fp, tmp, 2);
+            fwrite(tmp, 2, 1, fp);
             free(tmp);
         }
         short int *tmp = malloc(2);
         fseek(fp, t1 * 512 + (inblock / 512) * 2, SEEK_SET);
-        write(fp, tmp, 2);
+        fwrite(tmp, 2, 1, fp);
         t2 = *tmp;
         free(tmp);
         fseek(fp, t2 * 512 + (inblock % 512), SEEK_SET);
         // 目录项写回去
         ndir->st_ino = node;
-        write(fp, ndir, sizeof(struct directory));
+        char buffer[16] = {0};
+        writedir(buffer, ndir);
+        fwrite(buffer, 16, 1, fp);
         // 改inode区
         struct inode *nnode = malloc(sizeof(struct inode));
         nnode->st_ino = node;
@@ -818,11 +961,15 @@ void mkd(char *name, struct inode *root, char *ex)
         nnode->ac_size = 0;
         nnode->st_size = 0;
         fseek(fp, 512 + 64 * node, SEEK_SET);
-        write(fp, nnode, sizeof(struct inode));
+        char buffer[64] = {0};
+        writeino(buffer, nnode);
+        fwrite(buffer, 64, 1, fp);
         // 改root
         root->st_nlink++;
         fseek(fp, 512 * 6, SEEK_SET);
-        write(fp, root, sizeof(struct inode));
+        char buffer[64] = {0};
+        writeino(buffer, root);
+        fwrite(buffer, 64, 1, fp);
         free(nnode);
         free(ndir);
         fclose(fp);
@@ -851,57 +998,57 @@ void mkd(char *name, struct inode *root, char *ex)
         // 同时把inode位图的那一位置1
         unsigned char bitmap[512];
         fseek(fp, 512, SEEK_SET);
-        read(fp, bitmap, 500);
+        fread(bitmap, 500, 1, fp);
         int node = findFirstSetBit(bitmap, 512);
-        write(fp, bitmap, 500);
+        fwrite(bitmap, 500, 1, fp);
         // 如果正好新开一块，找个新块号，改位图和addr
         if (root->st_size == 33687552)
         {
             unsigned char datamap[2048];
             fseek(fp, 1024, SEEK_SET);
-            read(fp, datamap, 2048);
+            fread(datamap, 2048, 1, fp);
             int nblock = findAndSetFirstZeroBit(datamap, 2048);
-            write(fp, datamap, 2048);
+            fwrite(datamap, 2048, 1, fp);
             root->addr[6] = nblock;
         }
         if (inblock == 0)
         {
             unsigned char datamap[2048];
             fseek(fp, 1024, SEEK_SET);
-            read(fp, datamap, 2048);
+            fread(datamap, 2048, 1, fp);
             int nblock = findAndSetFirstZeroBit(datamap, 2048);
-            write(fp, datamap, 2048);
+            fwrite(datamap, 2048, 1, fp);
 
             short int *tmp = malloc(2);
             *tmp = nblock;
             t1 = nblock;
             fseek(fp, root->addr[6] * 512 + block * 2, SEEK_SET);
-            write(fp, tmp, 2);
+            fwrite(tmp, 2, 1, fp);
             free(tmp);
         }
         short int *tmp = malloc(2);
         fseek(fp, root->addr[6] * 512 + 2 * block, SEEK_SET);
-        read(fp, tmp, 2);
+        fread(tmp, 2, 1, fp);
         t1 = *tmp;
         free(tmp);
         if (inblock % (256 * 512) == 0)
         {
             unsigned char datamap[2048];
             fseek(fp, 1024, SEEK_SET);
-            read(fp, datamap, 2048);
+            fread(datamap, 2048, 1, fp);
             int nblock = findAndSetFirstZeroBit(datamap, 2048);
-            write(fp, datamap, 2048);
+            fwrite(datamap, 2048, 1, fp);
 
             short int *tmp = malloc(2);
             *tmp = nblock;
             t2 = nblock;
             fseek(fp, t1 * 512 + (inblock / (256 * 512)) * 2, SEEK_SET);
-            write(fp, tmp, 2);
+            fwrite(tmp, 2, 1, fp);
             free(tmp);
         }
         short int *tmp = malloc(2);
         fseek(fp, t1 * 512 + (inblock / (256 * 512)) * 2, SEEK_SET);
-        write(fp, tmp, 2);
+        fwrite(tmp, 2, 1, fp);
         t2 = *tmp;
         free(tmp);
         // fseek(fp, t2 * 512 + (inblock % (256 * 512)) * 2, SEEK_SET);
@@ -910,38 +1057,45 @@ void mkd(char *name, struct inode *root, char *ex)
         {
             unsigned char datamap[2048];
             fseek(fp, 1024, SEEK_SET);
-            read(fp, datamap, 2048);
+            fread(datamap, 20481, 1, fp);
             int nblock = findAndSetFirstZeroBit(datamap, 2048);
-            write(fp, datamap, 2048);
+            fwrite(datamap, 2048, 1, fp);
 
             short int *tmp = malloc(2);
             *tmp = nblock;
             t3 = nblock;
             fseek(fp, t2 * 512 + (ninblock / (512)) * 2, SEEK_SET);
-            write(fp, tmp, 2);
+            fwrite(tmp, 2, 1, fp);
             free(tmp);
         }
         short int *tmp = malloc(2);
         fseek(fp, t2 * 512 + (ninblock / (512)) * 2, SEEK_SET);
         t3 = *tmp;
-        write(fp, tmp, 2);
+        fwrite(tmp, 2, 1, fp);
         free(tmp);
         fseek(fp, t3 * 512 + (ninblock % 512), SEEK_SET);
         // 目录项写回去
         ndir->st_ino = node;
-        write(fp, ndir, sizeof(struct directory));
+        char buffer[16] = {0};
+        writedir(buffer, ndir);
+        fwrite(buffer, 16, 1, fp);
         // 改inode区
         struct inode *nnode = malloc(sizeof(struct inode));
+        inoinit(nnode);
         nnode->st_ino = node;
         nnode->st_nlink = 0;
         nnode->ac_size = 0;
         nnode->st_size = 0;
         fseek(fp, 512 + 64 * node, SEEK_SET);
-        write(fp, nnode, sizeof(struct inode));
+        char buffer[64] = {0};
+        writeino(buffer, nnode);
+        fwrite(buffer, 64, 1, fp);
         // 改root
         root->st_nlink++;
         fseek(fp, 512 * 6, SEEK_SET);
-        write(fp, root, sizeof(struct inode));
+        char buffer[64] = {0};
+        writeino(buffer, root);
+        fwrite(buffer, 64, 1, fp);
         free(nnode);
         free(ndir);
         fclose(fp);
@@ -968,7 +1122,9 @@ static int MFS_readdir(char *name)
     FILE *fp = NULL;
     fp = fopen(FILEADDR, "r+");
     fseek(fp, 6 * 512, SEEK_SET);
-    read(fp, root, sizeof(struct inode));
+    char *buffer[64] = {0};
+    fread(buffer, 64, 1, fp);
+    readino(buffer, root);
     if (find(name, ex, root->addr, root->st_size) != -1)
     {
         free(root);
@@ -1029,40 +1185,40 @@ static int MFS_read(const char *path, char *buf, off_t offset)
         if (i < 4)
         {
             fseek(fp, io->addr[i] * 512, SEEK_SET);
-            read(fp, block, 512);
+            fread(block, 512, 1, fp);
             memcpy(buf, block, 512);
             buf += 512;
         }
         else if (i < 260)
         {
             fseek(fp, io->addr[4] * 512 + (i - 4) * 2, SEEK_SET);
-            read(fp, t1, 2);
+            fread(t1, 2, 1, fp);
             fseek(fp, (*t1) * 512, SEEK_SET);
-            read(fp, block, 512);
+            fread(block, 512, 1, fp);
             memcpy(buf, block, 512);
             buf += 512;
         }
         else if (i < 65796)
         {
             fseek(fp, io->addr[5] * 512 + ((i - 260) / 256) * 2, SEEK_SET);
-            read(fp, t1, 2);
+            fread(t1, 2, 1, fp);
             fseek(fp, (*t1) * 512 + 2 * ((i - 260) % 256), SEEK_SET);
-            read(fp, t2, 2);
+            fread(t2, 2, 1, fp);
             fseek(fp, (*t2) * 512, SEEK_SET);
-            read(fp, block, 512);
+            fread(block, 512, 1, fp);
             memcpy(buf, block, 512);
             buf += 512;
         }
         else
         {
             fseek(fp, io->addr[6] * 512 + ((i - 65796) / (256 * 256)) * 2, SEEK_SET);
-            read(fp, t1, 2);
+            fread(t1, 2, 1, fp);
             fseek(fp, (*t1) * 512 + ((i - 65796) % (256 * 256)) * 2, SEEK_SET);
-            read(fp, t2, 2);
+            fread(t2, 2, 1, fp);
             fseek(fp, (*t2) * 512 + 2 * (((i - 65796) % (256 * 256)) / 256), SEEK_SET);
-            read(fp, t3, 2);
+            fread(t3, 2, 1, fp);
             fseek(fp, (*t3) * 512, SEEK_SET);
-            read(fp, block, 512);
+            fread(block, 512, 1, fp);
             memcpy(buf, block, 512);
             buf += 512;
         }
@@ -1073,42 +1229,334 @@ static int MFS_read(const char *path, char *buf, off_t offset)
         if (blocknum < 4)
         {
             fseek(fp, io->addr[blocknum] * 512, SEEK_SET);
-            read(fp, last, blocklast);
+            fread(last, blocklast, 1, fp);
             memcpy(buf, last, blocklast);
         }
         else if (blocknum < 260)
         {
             fseek(fp, io->addr[4] * 512 + (blocknum - 4) * 2, SEEK_SET);
-            read(fp, t1, 2);
+            fread(t1, 2, 1, fp);
             fseek(fp, (*t1) * 512, SEEK_SET);
-            read(fp, last, blocklast);
+            fread(last, blocklast, 1, fp);
             memcpy(buf, last, blocklast);
         }
         else if (blocknum < 65796)
         {
             fseek(fp, io->addr[5] * 512 + ((blocknum - 260) / 256) * 2, SEEK_SET);
-            read(fp, t1, 2);
+            fread(t1, 2, 1, fp);
             fseek(fp, (*t1) * 512 + 2 * ((blocknum - 260) % 256), SEEK_SET);
-            read(fp, t2, 2);
+            fread(t2, 2, 1, fp);
             fseek(fp, (*t2) * 512, SEEK_SET);
-            read(fp, last, blocklast);
+            fread(last, blocklast, 1, fp);
             memcpy(buf, last, blocklast);
         }
         else
         {
             fseek(fp, io->addr[6] * 512 + ((blocknum - 65796) / (256 * 256)) * 2, SEEK_SET);
-            read(fp, t1, 2);
+            fread(t1, 2, 1, fp);
             fseek(fp, (*t1) * 512 + ((blocknum - 65796) % (256 * 256)) * 2, SEEK_SET);
-            read(fp, t2, 2);
+            fread(t2, 2, 1, fp);
             fseek(fp, (*t2) * 512 + 2 * (((blocknum - 65796) % (256 * 256)) / 256), SEEK_SET);
-            read(fp, t3, 2);
+            fread(t3, 2, 1, fp);
             fseek(fp, (*t3) * 512, SEEK_SET);
-            read(fp, last, blocklast);
+            fread(last, blocklast, 1, fp);
             memcpy(buf, last, blocklast);
         }
     }
     buf = start;
     buf += offset;
+    return 0;
+}
+int find_and_remove(short int block, off_t size, char *na, char *ex)
+{
+    FILE *fp = NULL;
+    fp = fopen(FILEADDR, "r+");
+    struct directory *dir = malloc(sizeof(struct directory));
+    int i = 0;
+    for (; i < size; i += 16)
+    {
+        fseek(fp, block * 512 + i, SEEK_SET);
+        char *buffer[16] = {0};
+        fread(buffer, 16, 1, fp);
+        readfir(buffer, dir);
+        if (strcmp(na, dir->name) && strcmp(ex, dir->expand))
+        {
+            dir->st_ino = -1;
+            char buffer[16] = {0};
+            writedir(buffer, dir);
+            fwrite(buffer, 16, 1, fp);
+            free(dir);
+            fclose(fp);
+            return 1;
+        }
+    }
+    free(dir);
+    fclose(fp);
+    return 0;
+}
+void remove1(struct inode *io, char *na, char *ex)
+{
+    FILE *fp = NULL;
+    fp = fopen(FILEADDR, "r+");
+    // 全部读了，再偏移
+    short int blocknum = io->st_size / 512;
+    int blocklast = io->st_size % 512;
+
+    short int *t1 = malloc(2);
+    short int *t2 = malloc(2);
+    short int *t3 = malloc(2);
+    for (int i = 0; i < blocknum; i++)
+    {
+        if (i < 4)
+        {
+            if (find_and_remove(io->addr[i], 512, na, ex))
+            {
+                return;
+            }
+        }
+        else if (i < 260)
+        {
+            fseek(fp, io->addr[4] * 512 + (i - 4) * 2, SEEK_SET);
+            fread(t1, 2, 1, fp);
+            if (find_and_remove((*t1), 512, na, ex))
+            {
+                return;
+            }
+        }
+        else if (i < 65796)
+        {
+            fseek(fp, io->addr[5] * 512 + ((i - 260) / 256) * 2, SEEK_SET);
+            fread(t1, 2, 1, fp);
+            fseek(fp, (*t1) * 512 + 2 * ((i - 260) % 256), SEEK_SET);
+            fread(t2, 2, 1, fp);
+            if (find_and_remove((*t2), 512, na, ex))
+            {
+                return;
+            }
+        }
+        else
+        {
+            fseek(fp, io->addr[6] * 512 + ((i - 65796) / (256 * 256)) * 2, SEEK_SET);
+            fread(t1, 2, 1, fp);
+            fseek(fp, (*t1) * 512 + ((i - 65796) % (256 * 256)) * 2, SEEK_SET);
+            fread(t2, 2, 1, fp);
+            fseek(fp, (*t2) * 512 + 2 * (((i - 65796) % (256 * 256)) / 256), SEEK_SET);
+            fread(t3, 2, 1, fp);
+            if (find_and_remove((*t3), 512, na, ex))
+            {
+                return;
+            }
+        }
+    }
+    if (blocklast != 0)
+    {
+
+        if (blocknum < 4)
+        {
+
+            if (find_and_remove(io->addr[blocknum], blocklast, na, ex))
+            {
+                return;
+            }
+        }
+        else if (blocknum < 260)
+        {
+            fseek(fp, io->addr[4] * 512 + (blocknum - 4) * 2, SEEK_SET);
+            fread(t1, 2, 1, fp);
+            if (find_and_remove((*t1), blocklast, na, ex))
+            {
+                return;
+            }
+        }
+        else if (blocknum < 65796)
+        {
+            fseek(fp, io->addr[5] * 512 + ((blocknum - 260) / 256) * 2, SEEK_SET);
+            fread(t1, 2, 1, fp);
+            fseek(fp, (*t1) * 512 + 2 * ((blocknum - 260) % 256), SEEK_SET);
+            fread(t2, 2, 1, fp);
+            if (find_and_remove((*t2), blocklast, na, ex))
+            {
+                return;
+            }
+        }
+        else
+        {
+            fseek(fp, io->addr[6] * 512 + ((blocknum - 65796) / (256 * 256)) * 2, SEEK_SET);
+            fread(t1, 2, 1, fp);
+            fseek(fp, (*t1) * 512 + ((blocknum - 65796) % (256 * 256)) * 2, SEEK_SET);
+            fread(t2, 2, 1, fp);
+            fseek(fp, (*t2) * 512 + 2 * (((blocknum - 65796) % (256 * 256)) / 256), SEEK_SET);
+            fread(t3, 2, 1, fp);
+            if (find_and_remove((*t3), blocklast, na, ex))
+            {
+                return;
+            }
+        }
+    }
+}
+void clear(int block)
+{
+    int myArray[64];
+    memset(myArray, 0, sizeof(myArray));
+    FILE *fp = NULL;
+    fp = fopen(FILEADDR, "r+");
+    fseek(fp, 512 * block, SEEK_SET);
+    fwrite(myArray, 512, 1, fp);
+    int bitmap[2048];
+    fseek(fp, 512 * 2, SEEK_SET);
+    fread(bitmap, 2048, 1, fp);
+    int byteIndex = block / 8;
+    int bitOffset = block % 8;
+
+    // 使用位运算将指定位设置为0
+    bitmap[byteIndex] &= ~(1 << bitOffset);
+    fwrite(fp, bitmap, 2048, 1, fp);
+    fclose(fp);
+    return;
+}
+void removeblock(struct inode *io)
+{
+    FILE *fp = NULL;
+    fp = fopen(FILEADDR, "r+");
+    // 全部读了，再偏移
+    short int blocknum = io->st_size / 512;
+    int blocklast = io->st_size % 512;
+
+    short int *t1 = malloc(2);
+    short int *t2 = malloc(2);
+    short int *t3 = malloc(2);
+    for (int i = 0; i < blocknum; i++)
+    {
+        if (i < 4)
+        {
+            clear(io->addr[i]);
+        }
+        else if (i < 260)
+        {
+            fseek(fp, io->addr[4] * 512 + (i - 4) * 2, SEEK_SET);
+            fread(t1, 2, 1, fp);
+            (clear((*t1)));
+        }
+        else if (i < 65796)
+        {
+            fseek(fp, io->addr[5] * 512 + ((i - 260) / 256) * 2, SEEK_SET);
+            fread(t1, 2, 1, fp);
+            fseek(fp, (*t1) * 512 + 2 * ((i - 260) % 256), SEEK_SET);
+            fread(t2, 2, 1, fp);
+            clear((*t2));
+        }
+        else
+        {
+            fseek(fp, io->addr[6] * 512 + ((i - 65796) / (256 * 256)) * 2, SEEK_SET);
+            fread(t1, 2, 1, fp);
+            fseek(fp, (*t1) * 512 + ((i - 65796) % (256 * 256)) * 2, SEEK_SET);
+            fread(t2, 2, 1, fp);
+            fseek(fp, (*t2) * 512 + 2 * (((i - 65796) % (256 * 256)) / 256), SEEK_SET);
+            fread(t3, 2, 1, fp);
+            clear((*t3));
+        }
+    }
+    if (blocklast != 0)
+    {
+
+        if (blocknum < 4)
+        {
+
+            clear(io->addr[blocknum]);
+        }
+        else if (blocknum < 260)
+        {
+            fseek(fp, io->addr[4] * 512 + (blocknum - 4) * 2, SEEK_SET);
+            fread(t1, 2, 1, fp);
+            clear((*t1));
+        }
+        else if (blocknum < 65796)
+        {
+            fseek(fp, io->addr[5] * 512 + ((blocknum - 260) / 256) * 2, SEEK_SET);
+            fread(t1, 2, 1, fp);
+            fseek(fp, (*t1) * 512 + 2 * ((blocknum - 260) % 256), SEEK_SET);
+            fread(t2, 2, 1, fp);
+            clear((*t2));
+        }
+        else
+        {
+            fseek(fp, io->addr[6] * 512 + ((blocknum - 65796) / (256 * 256)) * 2, SEEK_SET);
+            fread(t1, 2, 1, fp);
+            fseek(fp, (*t1) * 512 + ((blocknum - 65796) % (256 * 256)) * 2, SEEK_SET);
+            fread(t3, 2, 1, fp);
+            fseek(fp, (*t2) * 512 + 2 * (((blocknum - 65796) % (256 * 256)) / 256), SEEK_SET);
+            fread(t3, 2, 1, fp);
+            clear((*t3));
+        }
+    }
+}
+static int SFS_unlink(char *path)
+{
+    struct inode *io = malloc(sizeof(struct inode));
+    int flag = get_fd_to_attr(path, io);
+    char *name;
+    char *expand;
+    if (flag == 0)
+    {
+        return -ENOENT;
+    }
+    if (flag == 1)
+    {
+        return -EISDIR;
+    }
+    char *lastSlash = strrchr(path, '/');
+    if (lastSlash != NULL)
+    {
+        // 找到"."的位置
+        char *dot = strrchr(lastSlash, '.');
+
+        if (dot != NULL)
+        {
+            // 拷贝"name"部分
+            strncpy(name, lastSlash + 1, dot - lastSlash - 1);
+            name[dot - lastSlash - 1] = '\0';
+
+            // 拷贝"expand"部分
+            strcpy(expand, dot + 1);
+
+            // 在"."的位置设置为字符串结束标志
+            *dot = '\0';
+        }
+    }
+    struct inode *io2 = malloc(sizeof(struct inode));
+    get_fd_to_attr(path, io2);
+    remove1(io2, name, expand);
+    // 最后改
+    io2->ac_size -= io->ac_size;
+    io2->st_nlink--;
+    // 释放块空间
+    removeblock(io);
+    // inode区删自己，父级写回去
+    int del[8];
+    memset(del, 0, sizeof(del));
+    FILE *fp = NULL;
+    fp = fopen(FILEADDR, "r+");
+    fseek(fp, 512 * 6 + 64 * io->st_ino, SEEK_SET);
+    char buffer[64] = {0};
+    writeino(buffer, del);
+    fwrite(buffer, 64, 1, fp);
+    fseek(fp, 512 * 6 + 64 * io2->st_ino, SEEK_SET);
+    char buffer[64] = {0};
+    writeino(buffer, io2);
+    fwrite(buffer, 64, 1, fp);
+    // inode位图
+    int inomap[500];
+    fseek(fp, 512, SEEK_SET);
+    fread(inomap, 500, 1, fp);
+    int byteIndex = io->st_ino / 8;
+    int bitOffset = io->st_ino % 8;
+
+    // 使用位运算将指定位设置为0
+    inomap[byteIndex] &= ~(1 << bitOffset);
+    fwrite(inomap, 500, 1, fp);
+    free(io);
+    free(io2);
+    fclose(fp);
     return 0;
 }
 static struct fuse_operations SFS_opener

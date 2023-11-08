@@ -28,17 +28,27 @@ struct sb
 };
 
 struct inode
-{                            // 共64字节
-    short int st_mode;       /* 权限，2字节 */
-    short int st_ino;        /* i-node号，2字节 */
-    char st_nlink;           /* 连接数，1字节 */
-    uid_t st_uid;            /* 拥有者的用户 ID ，4字节 */
-    gid_t st_gid;            /* 拥有者的组 ID，4字节  */
-    off_t st_size;           /*文件大小，4字节 */
+{                      // 共64字节
+    short int st_mode; /* 权限，2字节 */
+    short int st_ino;  /* i-node号，2字节 */
+    char st_nlink;     /* 连接数，1字节 */
+    uid_t st_uid;      /* 拥有者的用户 ID ，4字节 */
+    gid_t st_gid;      /* 拥有者的组 ID，4字节  */
+    off_t st_size;     /*文件大小，4字节 */
+    off_t ac_size;
     struct timespec st_atim; /* 16个字节time of last access */
     short int addr[7];       /*磁盘地址，14字节*/
 };
-
+void inoinit(struct inode *root)
+{
+    root->st_ino = 0;
+    root->st_size = 0;
+    root->st_nlink = 0;
+    root->st_gid = 0;
+    root->st_uid = 0;
+    root->ac_size = 0;
+    root->st_mode = 0;
+}
 struct directory
 { // 共16字节
     char name[FILENAME + 1];
@@ -46,6 +56,92 @@ struct directory
     short int st_ino; /* i-node号，2字节 */
     // 3字节备用
 };
+void writeino(char *buffer, const struct inode *data)
+{
+    int offset = 0;
+    // 写入struct inode的数据到缓冲区
+    memcpy(buffer + offset, &data->st_mode, sizeof(data->st_mode));
+    offset += sizeof(data->st_mode);
+
+    memcpy(buffer + offset, &data->st_ino, sizeof(data->st_ino));
+    offset += sizeof(data->st_ino);
+
+    memcpy(buffer + offset, &data->st_nlink, sizeof(data->st_nlink));
+    offset += sizeof(data->st_nlink);
+
+    memcpy(buffer + offset, &data->st_uid, sizeof(data->st_uid));
+    offset += sizeof(data->st_uid);
+
+    memcpy(buffer + offset, &data->st_gid, sizeof(data->st_gid));
+    offset += sizeof(data->st_gid);
+
+    memcpy(buffer + offset, &data->st_size, sizeof(data->st_size));
+    offset += sizeof(data->st_size);
+
+    memcpy(buffer + offset, &data->ac_size, sizeof(data->ac_size));
+    offset += sizeof(data->ac_size);
+
+    memcpy(buffer + offset, &data->st_atim.tv_sec, sizeof(data->st_atim.tv_sec));
+    offset += sizeof(data->st_atim.tv_sec);
+
+    memcpy(buffer + offset, &data->st_atim.tv_nsec, sizeof(data->st_atim.tv_nsec));
+    offset += sizeof(data->st_atim.tv_nsec);
+
+    // 写入 addr 数组
+    memcpy(buffer + offset, data->addr, sizeof(data->addr));
+}
+
+void readino(const char *buffer, struct inode *data)
+{
+    int offset = 0;
+    // 从缓冲区读取数据到 struct inode
+    memcpy(&data->st_mode, buffer + offset, sizeof(data->st_mode));
+    offset += sizeof(data->st_mode);
+
+    memcpy(&data->st_ino, buffer + offset, sizeof(data->st_ino));
+    offset += sizeof(data->st_ino);
+
+    memcpy(&data->st_nlink, buffer + offset, sizeof(data->st_nlink));
+    offset += sizeof(data->st_nlink);
+
+    memcpy(&data->st_uid, buffer + offset, sizeof(data->st_uid));
+    offset += sizeof(data->st_uid);
+
+    memcpy(&data->st_gid, buffer + offset, sizeof(data->st_gid));
+    offset += sizeof(data->st_gid);
+
+    memcpy(&data->st_size, buffer + offset, sizeof(data->st_size));
+    offset += sizeof(data->st_size);
+
+    memcpy(&data->ac_size, buffer + offset, sizeof(data->ac_size));
+    offset += sizeof(data->ac_size);
+
+    memcpy(&data->st_atim.tv_sec, buffer + offset, sizeof(data->st_atim.tv_sec));
+    offset += sizeof(data->st_atim.tv_sec);
+
+    memcpy(&data->st_atim.tv_nsec, buffer + offset, sizeof(data->st_atim.tv_nsec));
+    offset += sizeof(data->st_atim.tv_nsec);
+
+    // 读取 addr 数组
+    memcpy(data->addr, buffer + offset, sizeof(data->addr));
+}
+
+void writedir(char *buffer, const struct directory *data)
+{
+    // 写入 directory 结构体数据到缓冲区
+    memcpy(buffer, data->name, FILENAME + 1);
+    memcpy(buffer + FILENAME + 1, data->expand, EXPAND + 1);
+    memcpy(buffer + FILENAME + 1 + EXPAND + 1, &data->st_ino, sizeof(data->st_ino));
+}
+
+void readdir(const char *buffer, struct directory *data)
+{
+    // 从缓冲区读取 directory 结构体数据
+    memcpy(data->name, buffer, FILENAME + 1);
+    memcpy(data->expand, buffer + FILENAME + 1, EXPAND + 1);
+    memcpy(&data->st_ino, buffer + FILENAME + 1 + EXPAND + 1, sizeof(data->st_ino));
+}
+
 int main()
 {
     FILE *fp = NULL;
@@ -117,20 +213,21 @@ int main()
     // 初始化inode区
     fseek(fp, BLOCKSIZE * 6, SEEK_SET);
     struct inode *root = malloc(sizeof(struct inode));
+    inoinit(root);
     root->addr[0] = 518;
     int i2 = 1;
     for (; i2 <= 7; i2++)
     {
         root->addr[i2] = 0;
     }
-    root->st_ino = 0;
-    root->st_size = 0;
-    root->st_nlink = 0;
     // 杂七杂八的权限没搞
     clock_gettime(CLOCK_REALTIME, &(root->st_atim));
-    fwrite(root, sizeof(struct inode), 1, fp);
+    char buffer[64] = {0};
+    writeino(buffer, root);
+    fwrite(buffer, 64, 1, fp);
     printf("initial inode area success!\n");
     // 根目录一开始没有目录项
+    free(root);
     fclose(fp);
     printf("all init success!\n");
 }

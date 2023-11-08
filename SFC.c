@@ -1410,7 +1410,7 @@ void clear(int block)
 
     // 使用位运算将指定位设置为0
     bitmap[byteIndex] &= ~(1 << bitOffset);
-    fwrite(fp, bitmap, 2048, 1, fp);
+    fwrite(bitmap, 2048, 1, fp);
     fclose(fp);
     return;
 }
@@ -1522,6 +1522,68 @@ static int SFS_unlink(char *path)
             // 在"."的位置设置为字符串结束标志
             *dot = '\0';
         }
+    }
+    struct inode *io2 = malloc(sizeof(struct inode));
+    get_fd_to_attr(path, io2);
+    remove1(io2, name, expand);
+    // 最后改
+    io2->ac_size -= io->ac_size;
+    io2->st_nlink--;
+    // 释放块空间
+    removeblock(io);
+    // inode区删自己，父级写回去
+    int del[8];
+    memset(del, 0, sizeof(del));
+    FILE *fp = NULL;
+    fp = fopen(FILEADDR, "r+");
+    fseek(fp, 512 * 6 + 64 * io->st_ino, SEEK_SET);
+    char buffer[64] = {0};
+    writeino(buffer, del);
+    fwrite(buffer, 64, 1, fp);
+    fseek(fp, 512 * 6 + 64 * io2->st_ino, SEEK_SET);
+    char buffer[64] = {0};
+    writeino(buffer, io2);
+    fwrite(buffer, 64, 1, fp);
+    // inode位图
+    int inomap[500];
+    fseek(fp, 512, SEEK_SET);
+    fread(inomap, 500, 1, fp);
+    int byteIndex = io->st_ino / 8;
+    int bitOffset = io->st_ino % 8;
+
+    // 使用位运算将指定位设置为0
+    inomap[byteIndex] &= ~(1 << bitOffset);
+    fwrite(inomap, 500, 1, fp);
+    free(io);
+    free(io2);
+    fclose(fp);
+    return 0;
+}
+static int SFS_rmdir(char *path)
+{
+    struct inode *io = malloc(sizeof(struct inode));
+    int flag = get_fd_to_attr(path, io);
+    char *name;
+    char *expand[3];
+    expand[0] = '\0';
+    if (flag == 0)
+    {
+        return -ENOENT;
+    }
+    if (flag == 2)
+    {
+        return -ENOTDIR;
+    }
+    if (io->ac_size != 0)
+    {
+        return -ENOTEMPTY;
+    }
+    char *lastSlash = strrchr(path, '/');
+    if (lastSlash != NULL)
+    {
+        // 找到"/"的位置
+        strcpy(name, lastSlash + 1);
+        *lastSlash = '\0';
     }
     struct inode *io2 = malloc(sizeof(struct inode));
     get_fd_to_attr(path, io2);

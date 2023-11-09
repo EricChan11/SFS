@@ -1,15 +1,18 @@
-#include <sys/stat.h>
-#include <sys/types.h>
+#define FUSE_USE_VERSION 31
+#include <fuse3/fuse.h>
+#include <time.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stddef.h>
 #include <string.h>
-#include <time.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <stddef.h>
 #include <assert.h>
 #include <unistd.h>
-
+#include <malloc.h>
+long TOTAL_BLOCK_NUM;
 #define FILENAME 8
 #define EXPAND 3
 #define FILEADDR ""
@@ -1163,7 +1166,7 @@ static int MFS_mknod(char *name, char *path)
     mkd(name, io, dot);
     return 0;
 }
-static int MFS_read(const char *path, char *buf, off_t offset)
+static int SFS_read(const char *path, char *buf, off_t offset)
 {
     struct inode *io = malloc(sizeof(struct inode));
     char *start = buf;
@@ -1621,6 +1624,196 @@ static int SFS_rmdir(char *path)
     fclose(fp);
     return 0;
 }
+static int SFS_rmdir(char *path, char *buf, off_t size, off_t offset)
+{
+    struct inode *io = malloc(sizeof(struct inode));
+    int flag = get_fd_to_attr(path, io);
+    FILE *fp = NULL;
+    fp = fopen(FILEADDR, "r+");
+
+    if (flag == 0)
+    {
+        return -ENOENT;
+    }
+    if (flag == 2)
+    {
+        return -ENOTDIR;
+    }
+    if (offset > io->st_size)
+    {
+        return -EFBIG;
+    }
+    int blockindex = offset / 512;
+    int blockstart = offset % 512;
+    int remain = size;
+
+    while (remain > 0 && blockindex < 260)
+    {
+        if (blockindex < 4)
+        {
+            if (io->addr[blockindex] == 0)
+            {
+                unsigned char datamap[2048];
+                fseek(fp, 1024, SEEK_SET);
+                fread(datamap, 2048, 1, fp);
+                int nblock = findAndSetFirstZeroBit(datamap, 2048);
+                fwrite(datamap, 2048, 1, fp);
+                io->addr[blockindex] = nblock;
+            }
+            fseek(fp, io->addr[blockindex] * 512 + blockstart, SEEK_SET);
+            if (remain < 512 - blockstart)
+            {
+                fwrite(buf, remain, 1, fp);
+                // 改inode
+                if (io->ac_size < offset + size)
+                {
+                    io->ac_size = offset + size;
+                }
+                if (io->st_size < offset + size)
+                {
+                    io->st_size = offset + size;
+                }
+                char bu[64] = {0};
+                writeino(bu, io);
+                fseek(fp, 6 * 512 + io->st_ino * 64, SEEK_SET);
+                fwrite(bu, 64, 1, fp);
+                free(io);
+                fclose(fp);
+                return 0;
+            }
+            else
+            {
+                fwrite(buf, 512 - blockstart, 1, fp);
+                remain -= (512 - blockstart);
+                blockindex++;
+                buf += (512 - blockstart);
+                blockstart = 0;
+            }
+        }
+        else
+        { //<260
+            if (io->addr[4] == 0)
+            { // 还没启动过一级
+                unsigned char datamap[2048];
+                fseek(fp, 1024, SEEK_SET);
+                fread(datamap, 2048, 1, fp);
+                int nblock = findAndSetFirstZeroBit(datamap, 2048);
+                fwrite(datamap, 2048, 1, fp);
+                io->addr[4] = nblock;
+            }
+            short int *tmp = malloc(2);
+            fseek(fp, io->addr[4] * 512 + (blockindex - 4) * 2, SEEK_SET);
+            fread(tmp, 2, 1, fp);
+            if (tmp == 0)
+            { // 这一块刚好是空的
+                unsigned char datamap[2048];
+                fseek(fp, 1024, SEEK_SET);
+                fread(datamap, 2048, 1, fp);
+                int nblock = findAndSetFirstZeroBit(datamap, 2048);
+                fwrite(datamap, 2048, 1, fp);
+                *tmp = nblock;
+                fwrite(tmp, 2, 1, fp);
+            }
+            fseek(fp, (*tmp) * 512, SEEK_SET);
+            if (remain < 512 - blockstart)
+            {
+                fwrite(buf, remain, 1, fp);
+                // 改inode
+                if (io->ac_size < offset + size)
+                {
+                    io->ac_size = offset + size;
+                }
+                if (io->st_size < offset + size)
+                {
+                    io->st_size = offset + size;
+                }
+                char bu[64] = {0};
+                writeino(bu, io);
+                fseek(fp, 6 * 512 + io->st_ino * 64, SEEK_SET);
+                fwrite(bu, 64, 1, fp);
+                free(io);
+                free(tmp);
+                fclose(fp);
+                return 0;
+            }
+            else
+            {
+                free(tmp);
+                fwrite(buf, 512 - blockstart, 1, fp);
+                remain -= (512 - blockstart);
+                blockindex++;
+                buf += (512 - blockstart);
+                blockstart = 0;
+            }
+        }
+    }
+
+    if (io->ac_size < offset + size - remain)
+    {
+        io->ac_size = offset + size - remain;
+    }
+    if (io->st_size < offset + size - remain)
+    {
+        io->st_size = offset + size - remain;
+    }
+    char bu[64] = {0};
+    writeino(bu, io);
+    fseek(fp, 6 * 512 + io->st_ino * 64, SEEK_SET);
+    fwrite(bu, 64, 1, fp);
+    free(io);
+    fclose(fp);
+    if (remain > 0)
+    {
+        // 写了260个
+        return -EFBIG;
+    }
+    else
+    {
+        return 0;
+    }
+}
+void write_to_file_system(char *buf, int size, int offset, int *addr, int num_blocks)
+{
+    int current_offset = offset; // 当前写入位置
+    int remaining_size = size;   // 剩余要写入的数据大小
+    int block_index = 0;         // 当前块号索引
+
+    while (remaining_size > 0 && block_index < num_blocks)
+    {
+        int block_start = addr[block_index] * 512;                                                          // 当前块的起始位置
+        int block_end = (block_index + 1 < num_blocks) ? addr[block_index + 1] * 512 : (block_start + 512); // 当前块的结束位置
+
+        // 计算当前块中可写入的数据大小
+        int bytes_to_write = (remaining_size < (block_end - current_offset)) ? remaining_size : (block_end - current_offset);
+
+        // 复制数据到当前块
+        memcpy(&buf[offset - block_start], &buf[size - remaining_size], bytes_to_write);
+
+        // 更新偏移和剩余数据大小
+        current_offset += bytes_to_write;
+        remaining_size -= bytes_to_write;
+
+        // 如果当前块已经写满，移动到下一个块
+        if (current_offset >= block_end)
+        {
+            block_index++;
+        }
+    }
+
+    // 这里需要更新文件系统的块分配信息，确保标记已使用的块
+
+    // 最后，你可能需要更新文件的元数据，如文件大小等信息
+}
+static void *SFS_init(struct fuse_conn_info *conn)
+{
+    printf("MFS_init：函数开始\n\n");
+    (void)conn;
+
+    // 用超级块中的fs_size初始化全局变量
+    TOTAL_BLOCK_NUM = 16384； fclose(fp);
+    printf("MFS_init：函数结束返回\n\n");
+    // return (long*)TOTAL_BLOCK_NUM;
+}
 static struct fuse_operations SFS_opener
 {
     .init = SFS_init,
@@ -1633,3 +1826,28 @@ static struct fuse_operations SFS_opener
     .read = SFS_read,
     .unlink = SFS_unlink,
 };
+int main(int argc, char *argv[])
+{
+    /*
+    int ret;
+    struct fuse_args args = FUSE_ARGS_INIT(argc, argv);//初始化
+
+    //设置默认值——我们必须使用strdup，以便fuse-opt-parse可以在用户指定其他值时释放默认值
+    options.filename = strdup("hello");
+    options.contents = strdup("Hello World!\n");
+    // Parse options
+    if (fuse_opt_parse(&args, &options, option_spec, NULL) == -1)//fuse_opt_parse出问题了，直接返回
+        return 1;
+    // 当指定--help时，首先打印我们自己的文件系统特定的帮助文本(show_help)，然后信号fuse_main显示附加帮助\
+        （fuse_main再次向选项添加“--help”）而不使用：line（通过将argv[0]设置为空字符串）
+    if (options.show_help) {//如果options里面有 -h
+        show_help(argv[0]);
+        assert(fuse_opt_add_arg(&args, "--help") == 0);//添加--help选项
+        args.argv[0] = (char*) "";
+    }
+    ret = fuse_main(args.argc, args.argv, &MFS_oper, NULL);
+    fuse_opt_free_args(&args);
+    return ret;*/
+    umask(0);
+    return fuse_main(argc, argv, &MFS_oper, NULL);
+}

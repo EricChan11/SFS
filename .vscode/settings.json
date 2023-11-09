@@ -81,6 +81,10 @@
     ]
   },
   "files.associations": {
-    "typeinfo": "c"
+    "typeinfo": "c",
+    "unistd.h": "c",
+    "stat.h": "c",
+    "types.h": "c",
+    "stdlib.h": "c"
   }
 }

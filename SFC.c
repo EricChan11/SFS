@@ -411,7 +411,7 @@ short int find(char *file_name, char *extensions, char addr[], off_t size)
         return res;
     }
 }
-int get_fd_to_attr(const char *path, struct inode *io)
+int get_fd_to_attr(char *path, struct inode *io)
 {
     // 0 not exist
     // 1 exist and is dir
@@ -492,8 +492,10 @@ int get_fd_to_attr(const char *path, struct inode *io)
     fclose(fp);
     return 2;
 }
-static int SFS_getattr(const char *path, struct stat *stbuf)
+static int SFS_getattr(const char *path1, struct stat *stbuf, struct fuse_file_info *fi)
 {
+    char *path;
+    memcpy(path, path1, strlen(path1) + 1);
     //(void) fi;
     int res = 0;
     struct inode *io = malloc(sizeof(struct inode));
@@ -528,7 +530,7 @@ static int SFS_getattr(const char *path, struct stat *stbuf)
         res = -ENOENT;
     } // 文件不存在
 
-    printf("FS_getattr：getattr成功，函数结束返回\n\n");
+    printf("SFS_getattr：getattr成功，函数结束返回\n\n");
     free(io);
     return res;
 }
@@ -631,8 +633,10 @@ void list_twice(void *buf, short int addr, int st_size, fuse_fill_dir_t &filler)
     free(ndir);
     fclose(fp);
 }
-static int MFS_readdir(const char *path, void *buf, fuse_fill_dir_t filler) //,enum use_readdir_flags flags)
+static int SFS_readdir(const char *path1, void *buf, fuse_fill_dir_t filleroff_t offset, struct fuse_file_info *fi) //,enum use_readdir_flags flags)
 {
+    char *path;
+    memcpy(path, path1, strlen(path1) + 1);
     struct inode *io = malloc(sizeof(struct inode));
     // 打开path指定的文件，将文件属性读到io中
     if (get_fd_to_attr(path, io) != 1)
@@ -741,14 +745,14 @@ void mkd(char *name, struct inode *root, char *ex)
         fp = fopen(FILEADDR, "r+");
 
         struct directory *ndir = malloc(sizeof(struct directory));
-        memcpy(ndir->name, name, strlen(name));
+        memcpy(ndir->name, name, strlen(name) + 1);
         if (ex == NULL)
         {
             ndir->expand[0] = '\0';
         }
         else
         {
-            memcpy(ndir->expand, ex, strlen(ex));
+            memcpy(ndir->expand, ex, strlen(ex) + 1);
         }
         // 搞个inode号
         // 同时把inode位图的那一位置1
@@ -802,14 +806,14 @@ void mkd(char *name, struct inode *root, char *ex)
         fp = fopen(FILEADDR, "r+");
         short int t1 = 0;
         struct directory *ndir = malloc(sizeof(struct directory));
-        memcpy(ndir->name, name, strlen(name));
+        memcpy(ndir->name, name, strlen(name) + 1);
         if (ex == NULL)
         {
             ndir->expand[0] = '\0';
         }
         else
         {
-            memcpy(ndir->expand, ex, strlen(ex));
+            memcpy(ndir->expand, ex, strlen(ex) + 1);
         }
         // 搞个inode号
         // 同时把inode位图的那一位置1
@@ -885,14 +889,14 @@ void mkd(char *name, struct inode *root, char *ex)
         short int t1 = 0;
         short int t2 = 0;
         struct directory *ndir = malloc(sizeof(struct directory));
-        memcpy(ndir->name, name, strlen(name));
+        memcpy(ndir->name, name, strlen(name) + 1);
         if (ex == NULL)
         {
             ndir->expand[0] = '\0';
         }
         else
         {
-            memcpy(ndir->expand, ex, strlen(ex));
+            memcpy(ndir->expand, ex, strlen(ex) + 1);
         }
         // 搞个inode号
         // 同时把inode位图的那一位置1
@@ -988,14 +992,14 @@ void mkd(char *name, struct inode *root, char *ex)
         short int t2 = 0;
         short int t3 = 0;
         struct directory *ndir = malloc(sizeof(struct directory));
-        memcpy(ndir->name, name, strlen(name));
+        memcpy(ndir->name, name, strlen(name) + 1);
         if (ex == NULL)
         {
             ndir->expand[0] = '\0';
         }
         else
         {
-            memcpy(ndir->expand, ex, strlen(ex));
+            memcpy(ndir->expand, ex, strlen(ex) + 1);
         }
         // 搞个inode号
         // 同时把inode位图的那一位置1
@@ -1105,18 +1109,20 @@ void mkd(char *name, struct inode *root, char *ex)
         return;
     }
 }
-static int MFS_readdir(char *name)
+static int SFS_mkdir(const char *name1)
 {
+    char *name;
+    memcpy(name, name1, strlen(name1) + 1);
     if (strlen(name) > 8)
     {
-        printf("SFS_readattr：文件名过长\n\n");
+        printf("SFS_mkdir：文件名过长\n\n");
         return -ENAMETOOLONG;
     }
     for (int i = 0; i < strlen(name); i++)
     {
         if (name[i] == '/')
         {
-            printf("SFS_readattr：要创建的目录不在根目录下\n\n");
+            printf("SFS_mkdir：要创建的目录不在根目录下\n\n");
             return -EPERM;
         }
     }
@@ -1137,41 +1143,52 @@ static int MFS_readdir(char *name)
     mkd(name, root, NULL);
     free(root);
     fclose(fp);
-    printf("SFS_readattr：成功\n\n");
+    printf("SFS_mkdir：成功\n\n");
     return 0;
 }
-static int MFS_mknod(char *name, char *path)
+static int SFS_mknod(const char *name1, const char *path1, dev_t dev)
 {
+    char *path;
+    char *name;
+    memcpy(name, name1, strlen(name1) + 1);
+    memcpy(path, path1, strlen(path1) + 1);
     if (strcmp(path, "/"))
     {
+        printf("错误：SFS_mknod：根目录\n\n");
         return -EPERM;
     }
     char *tmp = NULL;
-    memcpy(tmp, name, strlen(name));
+    memcpy(tmp, name, strlen(name) + 1);
     char *dot = strrchr(tmp, '.');
     if (strlen(name) > 8 || strlen(dot) > 3)
     {
+        printf("错误：SFS_mknod：文件名过长\n\n");
         return -ENAMETOOLONG;
     }
-    memcpy(tmp, path, strlen(path));
+    memcpy(tmp, path, strlen(path) + 1);
     strcat(tmp, "/");
     strcat(tmp, name);
     struct inode *io = malloc(sizeof(struct inode));
     if (get_fd_to_attr(tmp, io) != 0)
     {
+        printf("错误：SFS_mknod：已经存在\n\n");
         return -EEXIST;
     }
     get_fd_to_attr(path, io);
     char *dot = strrchr(name, '.');
     mkd(name, io, dot);
+    printf("错误：SFS_mknod：成功\n\n");
     return 0;
 }
-static int SFS_read(const char *path, char *buf, off_t offset)
+static int SFS_read(const char *path1, char *buf, size_t size, off_t offset, struct fuse_file_info *fi)
 {
+    char *path;
+    memcpy(path, path1, strlen(path1) + 1);
     struct inode *io = malloc(sizeof(struct inode));
     char *start = buf;
     if (get_fd_to_attr(path, io) != 2)
     {
+        printf("错误：SFS_read：是目录不是文件\n\n");
         return -EISDIR;
     }
     FILE *fp = NULL;
@@ -1268,6 +1285,7 @@ static int SFS_read(const char *path, char *buf, off_t offset)
     }
     buf = start;
     buf += offset;
+    printf("错误：SFS_read：成功\n\n");
     return 0;
 }
 int find_and_remove(short int block, off_t size, char *na, char *ex)
@@ -1493,18 +1511,22 @@ void removeblock(struct inode *io)
         }
     }
 }
-static int SFS_unlink(char *path)
+static int SFS_unlink(const char *path1)
 {
+    char *path;
+    memcpy(path, path1, strlen(path1) + 1);
     struct inode *io = malloc(sizeof(struct inode));
     int flag = get_fd_to_attr(path, io);
     char *name;
     char *expand;
     if (flag == 0)
     {
+        printf("SFS_unlink：错误，不存在\n\n");
         return -ENOENT;
     }
     if (flag == 1)
     {
+        printf("SFS_unlink：错误，是目录\n\n");
         return -EISDIR;
     }
     char *lastSlash = strrchr(path, '/');
@@ -1560,10 +1582,13 @@ static int SFS_unlink(char *path)
     free(io);
     free(io2);
     fclose(fp);
+    printf("SFS_unlink：成功\n\n");
     return 0;
 }
-static int SFS_rmdir(char *path)
+static int SFS_rmdir(const char *path1)
 {
+    char *path;
+    memcpy(path, path1, strlen(path1) + 1);
     struct inode *io = malloc(sizeof(struct inode));
     int flag = get_fd_to_attr(path, io);
     char *name;
@@ -1571,14 +1596,17 @@ static int SFS_rmdir(char *path)
     expand[0] = '\0';
     if (flag == 0)
     {
+        printf("SFS_rmdir：错误，不存在\n\n");
         return -ENOENT;
     }
     if (flag == 2)
     {
+        printf("SFS_rmdir：错误，不是目录\n\n");
         return -ENOTDIR;
     }
     if (io->ac_size != 0)
     {
+        printf("SFS_rmdir：错误，目录非空\n\n");
         return -ENOTEMPTY;
     }
     char *lastSlash = strrchr(path, '/');
@@ -1622,9 +1650,10 @@ static int SFS_rmdir(char *path)
     free(io);
     free(io2);
     fclose(fp);
+    printf("SFS_rmdir：成功\n\n");
     return 0;
 }
-static int SFS_rmdir(char *path, char *buf, off_t size, off_t offset)
+static int SFS_write(char *path, char *buf, off_t size, off_t offset)
 {
     struct inode *io = malloc(sizeof(struct inode));
     int flag = get_fd_to_attr(path, io);
@@ -1633,14 +1662,17 @@ static int SFS_rmdir(char *path, char *buf, off_t size, off_t offset)
 
     if (flag == 0)
     {
+        printf("SFS_write：错误，不存在\n\n");
         return -ENOENT;
     }
     if (flag == 2)
     {
+        printf("SFS_write：错误，是文件\n\n");
         return -ENOTDIR;
     }
     if (offset > io->st_size)
     {
+        printf("SFS_write：太大了\n\n");
         return -EFBIG;
     }
     int blockindex = offset / 512;
@@ -1764,11 +1796,13 @@ static int SFS_rmdir(char *path, char *buf, off_t size, off_t offset)
     fclose(fp);
     if (remain > 0)
     {
+        printf("SFS_write：错误，太大了但是写了260\n\n");
         // 写了260个
         return -EFBIG;
     }
     else
     {
+        printf("SFS_write：成功\n\n");
         return 0;
     }
 }
@@ -1806,12 +1840,12 @@ void write_to_file_system(char *buf, int size, int offset, int *addr, int num_bl
 }
 static void *SFS_init(struct fuse_conn_info *conn)
 {
-    printf("MFS_init：函数开始\n\n");
+    printf("SFS_init：函数开始\n\n");
     (void)conn;
 
     // 用超级块中的fs_size初始化全局变量
     TOTAL_BLOCK_NUM = 16384； fclose(fp);
-    printf("MFS_init：函数结束返回\n\n");
+    printf("SFS_init：函数结束返回\n\n");
     // return (long*)TOTAL_BLOCK_NUM;
 }
 static struct fuse_operations SFS_opener
@@ -1821,7 +1855,7 @@ static struct fuse_operations SFS_opener
     .readdir = SFS_readdir,
     .mkdir = SFS_mkdir,
     .rmdir = SFS_rmdir,
-    .mknod = SFS_mkknod,
+    .mknod = SFS_mknod,
     .write = SFS_write,
     .read = SFS_read,
     .unlink = SFS_unlink,
@@ -1849,5 +1883,5 @@ int main(int argc, char *argv[])
     fuse_opt_free_args(&args);
     return ret;*/
     umask(0);
-    return fuse_main(argc, argv, &MFS_oper, NULL);
+    return fuse_main(argc, argv, &SFS_oper, NULL);
 }

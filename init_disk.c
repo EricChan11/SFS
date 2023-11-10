@@ -145,7 +145,7 @@ void readdir(const char *buffer, struct directory *data)
 int main()
 {
     FILE *fp = NULL;
-    fp = fopen("/home/cky/Desktop/SFS/disk", "r+"); // 打开文件
+    fp = fopen("/home/cky/libfuse-master/example/testmount", "r+"); // 打开文件
     if (fp == NULL)
     {
         printf("打开文件失败，文件不存在\n");

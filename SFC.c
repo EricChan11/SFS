@@ -15,7 +15,7 @@
 long TOTAL_BLOCK_NUM;
 #define FILENAME 8
 #define EXPAND 3
-#define FILEADDR ""
+char *FILEADDR = "/home/cky/libfuse-master/example/testmount";
 struct sb
 {
     long fs_size;                  // 文件系统的大小，以块为单位
@@ -633,7 +633,7 @@ void list_twice(void *buf, short int addr, int st_size, fuse_fill_dir_t &filler)
     free(ndir);
     fclose(fp);
 }
-static int SFS_readdir(const char *path1, void *buf, fuse_fill_dir_t filleroff_t offset, struct fuse_file_info *fi) //,enum use_readdir_flags flags)
+static int SFS_readdir(const char *path1, void *buf, fuse_fill_dir_t filler, off_t offset, struct fuse_file_info *fi) //,enum use_readdir_flags flags)
 {
     char *path;
     memcpy(path, path1, strlen(path1) + 1);
@@ -1109,7 +1109,7 @@ void mkd(char *name, struct inode *root, char *ex)
         return;
     }
 }
-static int SFS_mkdir(const char *name1)
+static int SFS_mkdir(const char *name1, mode_t mode)
 {
     char *name;
     memcpy(name, name1, strlen(name1) + 1);
@@ -1146,12 +1146,14 @@ static int SFS_mkdir(const char *name1)
     printf("SFS_mkdir：成功\n\n");
     return 0;
 }
-static int SFS_mknod(const char *name1, const char *path1, dev_t dev)
+static int SFS_mknod(const char *path1, mode_t mode, dev_t dev)
 {
     char *path;
     char *name;
-    memcpy(name, name1, strlen(name1) + 1);
     memcpy(path, path1, strlen(path1) + 1);
+    char *lastSlash = strrchr(path, '/');
+    strcpy(name, lastSlash + 1);
+    *lastSlash = '\0';
     if (strcmp(path, "/"))
     {
         printf("错误：SFS_mknod：根目录\n\n");
@@ -1180,7 +1182,7 @@ static int SFS_mknod(const char *name1, const char *path1, dev_t dev)
     printf("错误：SFS_mknod：成功\n\n");
     return 0;
 }
-static int SFS_read(const char *path1, char *buf, size_t size, off_t offset, struct fuse_file_info *fi)
+static int SFS_read(const char *path1, void *buf, size_t size, off_t offset, struct fuse_file_info *fi)
 {
     char *path;
     memcpy(path, path1, strlen(path1) + 1);
@@ -1653,8 +1655,11 @@ static int SFS_rmdir(const char *path1)
     printf("SFS_rmdir：成功\n\n");
     return 0;
 }
-static int SFS_write(char *path, char *buf, off_t size, off_t offset)
+static int SFS_write(const char *path1, const char *buf, off_t size, off_t offset, struct fuse_file_info *fi)
 {
+    char *path;
+    int off = 0;
+    memcpy(path, path1, strlen(path) + 1);
     struct inode *io = malloc(sizeof(struct inode));
     int flag = get_fd_to_attr(path, io);
     FILE *fp = NULL;
@@ -1695,7 +1700,7 @@ static int SFS_write(char *path, char *buf, off_t size, off_t offset)
             fseek(fp, io->addr[blockindex] * 512 + blockstart, SEEK_SET);
             if (remain < 512 - blockstart)
             {
-                fwrite(buf, remain, 1, fp);
+                fwrite(buf + off, remain, 1, fp);
                 // 改inode
                 if (io->ac_size < offset + size)
                 {
@@ -1715,10 +1720,10 @@ static int SFS_write(char *path, char *buf, off_t size, off_t offset)
             }
             else
             {
-                fwrite(buf, 512 - blockstart, 1, fp);
+                fwrite(buf + off, 512 - blockstart, 1, fp);
                 remain -= (512 - blockstart);
                 blockindex++;
-                buf += (512 - blockstart);
+                off += (512 - blockstart);
                 blockstart = 0;
             }
         }
@@ -1749,7 +1754,7 @@ static int SFS_write(char *path, char *buf, off_t size, off_t offset)
             fseek(fp, (*tmp) * 512, SEEK_SET);
             if (remain < 512 - blockstart)
             {
-                fwrite(buf, remain, 1, fp);
+                fwrite(buf + off, remain, 1, fp);
                 // 改inode
                 if (io->ac_size < offset + size)
                 {
@@ -1771,10 +1776,10 @@ static int SFS_write(char *path, char *buf, off_t size, off_t offset)
             else
             {
                 free(tmp);
-                fwrite(buf, 512 - blockstart, 1, fp);
+                fwrite(buf + off, 512 - blockstart, 1, fp);
                 remain -= (512 - blockstart);
                 blockindex++;
-                buf += (512 - blockstart);
+                off += (512 - blockstart);
                 blockstart = 0;
             }
         }
